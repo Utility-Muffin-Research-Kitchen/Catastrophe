@@ -1,0 +1,3 @@
+[submodule "themes/Allium-Themes"]
+	path = themes/Allium-Themes
+	url = https://github.com/goweiwen/Allium-Themes.git
