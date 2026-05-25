@@ -430,12 +430,20 @@ typedef enum {
     CAT_LAUNCHER_TABBED     = 0,  /* tab bar with category switching (default) */
     CAT_LAUNCHER_VERTICAL   = 1,  /* NextUI-style: flat left nav list + right preview */
     CAT_LAUNCHER_HORIZONTAL = 2,  /* kUI-style: horizontal parallelogram carousel */
+    CAT_LAUNCHER_COVERFLOW  = 3,  /* icon coverflow carousel */
 } cat_launcher_layout;
 
 typedef struct {
-    cat_launcher_layout layout;        /* default: CAT_LAUNCHER_TABBED */
-    float               list_split;   /* vertical: left panel width [0..1], default 0.45 */
-    int                 carousel_skew; /* horizontal: parallelogram skew px, default 30 */
+    cat_launcher_layout layout;              /* default: CAT_LAUNCHER_TABBED */
+    float               list_split;         /* vertical: left panel width [0..1], default 0.45 */
+    int                 carousel_skew;      /* horizontal: parallelogram skew px, default 30 */
+    /* Coverflow tunables (CAT_LAUNCHER_COVERFLOW only) */
+    int                 coverflow_icon_size;     /* center icon px (logical), default 256 */
+    int                 coverflow_side_size;     /* side icon px (logical), default 160 */
+    int                 coverflow_spacing;       /* px between icon centers, default 280 */
+    uint8_t             coverflow_side_alpha;    /* default 140 */
+    uint32_t            coverflow_anim_ms;       /* slide duration ms, default 180 */
+    char                coverflow_icon_dir[128]; /* relative to theme dir, default "system_icons" */
 } cat_stylesheet_launcher;
 
 typedef struct {
@@ -517,6 +525,8 @@ int    cat_stylesheet_available_themes(const char ***out_names, int *out_count);
 void   cat_stylesheet_free_theme_list(const char **names, int count);
 int    cat_stylesheet_list_wallpapers(const char *theme_dir, const char ***out, int *count);
 void   cat_stylesheet_free_string_list(const char **names, int count);
+const char *cat_get_active_theme_dir(void);
+const char *cat_get_active_theme_name(void);
 int    cat_reload_fonts(const char *font_path);
 int    cat_theme_state_load(char *out_name, size_t out_size);
 int    cat_theme_state_save(const char *theme_name);
@@ -1372,6 +1382,13 @@ static void cat__stylesheet_launcher_init_default(cat_stylesheet_launcher *l) {
     l->layout        = CAT_LAUNCHER_TABBED;
     l->list_split    = 0.45f;
     l->carousel_skew = 30;
+    l->coverflow_icon_size  = 256;
+    l->coverflow_side_size  = 160;
+    l->coverflow_spacing    = 280;
+    l->coverflow_side_alpha = 140;
+    l->coverflow_anim_ms    = 180;
+    strncpy(l->coverflow_icon_dir, "system_icons", sizeof(l->coverflow_icon_dir) - 1);
+    l->coverflow_icon_dir[sizeof(l->coverflow_icon_dir) - 1] = '\0';
 }
 
 void cat_stylesheet_init_default(cat_stylesheet *s) {
@@ -1497,6 +1514,8 @@ static void cat__stylesheet_load_launcher(cat_stylesheet_launcher *l, cJSON *obj
             l->layout = CAT_LAUNCHER_VERTICAL;
         else if (strcmp(v->valuestring, "horizontal") == 0)
             l->layout = CAT_LAUNCHER_HORIZONTAL;
+        else if (strcmp(v->valuestring, "coverflow") == 0)
+            l->layout = CAT_LAUNCHER_COVERFLOW;
         else
             l->layout = CAT_LAUNCHER_TABBED;
     }
@@ -1506,6 +1525,21 @@ static void cat__stylesheet_load_launcher(cat_stylesheet_launcher *l, cJSON *obj
     v = cJSON_GetObjectItem(obj, "carousel_skew");
     if (cJSON_IsNumber(v) && v->valueint >= 0)
         l->carousel_skew = v->valueint;
+    v = cJSON_GetObjectItem(obj, "coverflow_icon_size");
+    if (cJSON_IsNumber(v)) l->coverflow_icon_size = v->valueint;
+    v = cJSON_GetObjectItem(obj, "coverflow_side_size");
+    if (cJSON_IsNumber(v)) l->coverflow_side_size = v->valueint;
+    v = cJSON_GetObjectItem(obj, "coverflow_spacing");
+    if (cJSON_IsNumber(v)) l->coverflow_spacing = v->valueint;
+    v = cJSON_GetObjectItem(obj, "coverflow_side_alpha");
+    if (cJSON_IsNumber(v)) l->coverflow_side_alpha = (uint8_t)v->valueint;
+    v = cJSON_GetObjectItem(obj, "coverflow_anim_ms");
+    if (cJSON_IsNumber(v)) l->coverflow_anim_ms = (uint32_t)v->valueint;
+    v = cJSON_GetObjectItem(obj, "coverflow_icon_dir");
+    if (cJSON_IsString(v)) {
+        strncpy(l->coverflow_icon_dir, v->valuestring, sizeof(l->coverflow_icon_dir) - 1);
+        l->coverflow_icon_dir[sizeof(l->coverflow_icon_dir) - 1] = '\0';
+    }
 }
 
 static int cat__stylesheet_load_from_cjson(cat_stylesheet *s, cJSON *root) {
@@ -1681,6 +1715,9 @@ static void cat__stylesheet_to_ap_theme(const cat_stylesheet *s, ap_theme *t) {
     else
         t->bg_image_path[0] = '\0';
 }
+
+const char *cat_get_active_theme_dir(void)  { return cat__g.active_theme_dir; }
+const char *cat_get_active_theme_name(void) { return cat__g.active_theme; }
 
 int cat_stylesheet_apply(cat_stylesheet *s) {
     if (!s) return CAT_ERROR;
