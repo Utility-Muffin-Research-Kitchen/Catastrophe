@@ -44,6 +44,8 @@
 #include <sys/wait.h>
 #if defined(PLATFORM_TG5040) || defined(PLATFORM_TG5050) || defined(PLATFORM_MY355) || defined(PLATFORM_MLP1)
 #include <linux/input.h>
+#include <sys/ioctl.h>
+#include <poll.h>
 #endif
 #endif
 
@@ -343,6 +345,7 @@ typedef struct {
     ap_color highlight;         /* Selected item pill background */
     ap_color accent;            /* Footer outer pill, status bar bg */
     ap_color button_label;      /* Text inside footer button pills */
+    ap_color button_glyph_bg;   /* Inner A/B/X/Y pill background (defaults to highlight) */
     ap_color text;              /* Default text color */
     ap_color highlighted_text;  /* Text on highlighted/selected items */
     ap_color hint;              /* Help text, dim text */
@@ -379,6 +382,10 @@ typedef struct {
     cat_color         highlight_text_color;    /* default: #ffffff */
     cat_color         highlight_text_stroke_color; /* default: #00000000 */
     cat_color         disabled_color;          /* default: #585b70 */
+    /* Catastrophe extension: explicit color for "hint" text (per-row counts, footer status,
+       button-hint labels, scrollbars). When unset (0), falls back to disabled_color so all
+       existing Allium/Jawaka themes render identically. */
+    cat_color         hint_color;              /* default: 0 (= unset → use disabled_color) */
     float             tab_font_size;           /* default: 1.0 */
     cat_color         tab_color;               /* default: #ffffff70 */
     cat_color         tab_stroke_color;        /* default: #00000000 */
@@ -411,6 +418,11 @@ typedef struct {
     cat_color         button_bg_color;         /* default: #585b70 */
     cat_color         button_text_color;       /* default: #ffffff */
     cat_color         text_color;              /* default: #ffffff */
+    /* Catastrophe extension: explicit color for the inner A/B/X/Y pill behind the glyph
+       letter. When unset (0), falls back to ui.highlight_color so existing themes are
+       unaffected. Letting themes set this independently decouples the button-hint glyph
+       from the list-selection bg. */
+    cat_color         glyph_bg_color;          /* default: 0 (= unset → use highlight_color) */
 } cat_stylesheet_button_hints;
 
 typedef struct {
@@ -656,8 +668,7 @@ typedef struct {
     uint32_t            last_present_ms;
     bool                needs_frame;       /* true = render next frame at 60fps */
     uint32_t            next_redraw_ms;    /* absolute time of next scheduled redraw (0 = none) */
-    bool                has_wake_event;    /* stored event from SDL_WaitEventTimeout */
-    SDL_Event           wake_event;
+    int                 input_fd;          /* gamepad evdev fd for idle poll() wake (-1 = unavailable) */
 
     /* Scaling */
     float         scale_factor;
@@ -1330,6 +1341,7 @@ static void cat__stylesheet_ui_init_default(cat_stylesheet_ui *ui) {
     ui->highlight_text_color     = cat_color_rgba(0x00, 0x00, 0x00, 0xFF);
     ui->highlight_text_stroke_color = cat_color_rgba(0x00, 0x00, 0x00, 0x00);
     ui->disabled_color           = cat_color_rgba(0xFF, 0xFF, 0xFF, 0xFF);
+    ui->hint_color               = 0; /* unset → falls back to disabled_color at theme bind */
     ui->tab_font_size            = 1.0f;
     ui->tab_color                = cat_color_rgba(0xFF, 0xFF, 0xFF, 0x70);
     ui->tab_stroke_color         = cat_color_rgba(0x00, 0x00, 0x00, 0x00);
@@ -1363,6 +1375,7 @@ static void cat__stylesheet_button_hints_init_default(cat_stylesheet_button_hint
     bh->button_bg_color       = cat_color_rgba(0x58, 0x5B, 0x70, 0xFF);
     bh->button_text_color     = cat_color_rgba(0x1E, 0x23, 0x29, 0xFF);
     bh->text_color            = cat_color_rgba(0xFF, 0xFF, 0xFF, 0xFF);
+    bh->glyph_bg_color        = 0; /* unset → falls back to ui.highlight_color at theme bind */
 }
 
 static void cat__stylesheet_recents_init_default(cat_stylesheet_recents *r) {
@@ -1440,6 +1453,7 @@ static void cat__stylesheet_load_ui(cat_stylesheet_ui *ui, cJSON *obj) {
     cat__stylesheet_load_color(&ui->highlight_text_color, obj, "highlight_text_color");
     cat__stylesheet_load_color(&ui->highlight_text_stroke_color, obj, "highlight_text_stroke_color");
     cat__stylesheet_load_color(&ui->disabled_color, obj, "disabled_color");
+    cat__stylesheet_load_color(&ui->hint_color, obj, "hint_color");
     cat__stylesheet_load_color(&ui->tab_color, obj, "tab_color");
     cat__stylesheet_load_color(&ui->tab_stroke_color, obj, "tab_stroke_color");
     cat__stylesheet_load_color(&ui->tab_selected_color, obj, "tab_selected_color");
@@ -1486,6 +1500,7 @@ static void cat__stylesheet_load_button_hints(cat_stylesheet_button_hints *bh, c
     cat__stylesheet_load_color(&bh->button_bg_color, obj, "button_bg_color");
     cat__stylesheet_load_color(&bh->button_text_color, obj, "button_text_color");
     cat__stylesheet_load_color(&bh->text_color, obj, "text_color");
+    cat__stylesheet_load_color(&bh->glyph_bg_color, obj, "glyph_bg_color");
 }
 
 static void cat__stylesheet_load_recents(cat_stylesheet_recents *r, cJSON *obj) {
@@ -1697,9 +1712,16 @@ static void cat__stylesheet_to_ap_theme(const cat_stylesheet *s, ap_theme *t) {
        primary accent. Apostrophe parity = #9B2257 set in the C defaults. */
     t->accent           = cat_color_to_sdl(s->button_hints.button_a_color);
     t->button_label     = cat_color_to_sdl(s->button_hints.button_text_color);
+    /* Inner button-glyph pill: prefer explicit glyph_bg_color, fall back to highlight_color
+       so themes that don't opt in (Allium, older Jawaka) render exactly as before. */
+    t->button_glyph_bg  = cat_color_to_sdl(
+        s->button_hints.glyph_bg_color ? s->button_hints.glyph_bg_color
+                                       : s->ui.highlight_color);
     t->text             = cat_color_to_sdl(s->ui.text_color);
     t->highlighted_text = cat_color_to_sdl(s->ui.highlight_text_color);
-    t->hint             = cat_color_to_sdl(s->ui.disabled_color);
+    /* Hint text: prefer explicit hint_color, fall back to disabled_color (Allium parity). */
+    t->hint             = cat_color_to_sdl(
+        s->ui.hint_color ? s->ui.hint_color : s->ui.disabled_color);
     t->background       = cat_color_to_sdl(s->ui.background_color);
     t->ui_padding_x      = s->ui.padding_x;
     t->ui_padding_y      = s->ui.padding_y;
@@ -2798,12 +2820,6 @@ static void cat__handle_sdl_event(SDL_Event *ev, uint32_t now) {
 static void cat__process_sdl_events(void) {
     uint32_t now = SDL_GetTicks();
 
-    /* Process stored wake event first (from idle sleep in cat_present) */
-    if (cat__g.has_wake_event) {
-        cat__g.has_wake_event = false;
-        cat__handle_sdl_event(&cat__g.wake_event, now);
-    }
-
     SDL_Event ev;
     while (SDL_PollEvent(&ev)) {
         cat__handle_sdl_event(&ev, now);
@@ -3009,7 +3025,13 @@ void cat_request_frame_in(uint32_t ms) {
 
 static uint32_t cat__next_wake_time(void) {
     uint32_t now = SDL_GetTicks();
-    uint32_t wake = now + 1000; /* max 1s sleep — ensures clock updates */
+    /* Cap idle sleep at the next wall-clock minute boundary: the status-bar
+       clock is minute-resolution (%H:%M), so there is no reason to wake every
+       second. time() is whole-second, so this lands within ~1s of the true
+       boundary — fine for a minute clock, and ~60x fewer idle redraws. */
+    time_t t = time(NULL);
+    uint32_t to_next_minute = 60000u - (uint32_t)(t % 60) * 1000u;
+    uint32_t wake = now + to_next_minute;
 
     if (cat__g.next_redraw_ms != 0 && cat__g.next_redraw_ms < wake)
         wake = cat__g.next_redraw_ms;
@@ -3044,14 +3066,30 @@ void cat_present(void) {
             SDL_Delay(16 - elapsed);
         }
     } else {
-        /* Idle: sleep until next wake event or scheduled redraw */
+        /* Idle: sleep until input arrives or the next scheduled redraw.
+         * On device we block on the gamepad evdev fd so the kernel wakes us
+         * instantly on input -> ~zero idle CPU. SDL joysticks expose no fd for
+         * SDL to wait on, so SDL_WaitEventTimeout would busy-poll instead. */
         uint32_t wake = cat__next_wake_time();
         uint32_t now = SDL_GetTicks();
         int timeout = (wake > now) ? (int)(wake - now) : 0;
         if (timeout > 0) {
-            if (SDL_WaitEventTimeout(&cat__g.wake_event, timeout) == 1) {
-                cat__g.has_wake_event = true;
+#if CAT_PLATFORM_IS_DEVICE
+            if (cat__g.input_fd >= 0) {
+                struct pollfd pfd = { cat__g.input_fd, POLLIN, 0 };
+                if (poll(&pfd, 1, timeout) > 0 && (pfd.revents & POLLIN)) {
+                    /* Drain our wake-only fd; SDL reads the real events from its
+                     * own fd. Leaving these queued would keep poll() returning
+                     * immediately and burn CPU. */
+                    struct input_event evbuf[16];
+                    while (read(cat__g.input_fd, evbuf, sizeof(evbuf)) > 0) { }
+                }
+            } else {
+                SDL_Delay(timeout);
             }
+#else
+            SDL_Delay(timeout);
+#endif
         }
         if (cat__g.next_redraw_ms != 0 && SDL_GetTicks() >= cat__g.next_redraw_ms) {
             cat__g.next_redraw_ms = 0;
@@ -3886,7 +3924,7 @@ static void cat__footer_draw_item(int *cx, int btn_y, int inner_h, int btn_margi
         ? CAT_DS(CAT__BUTTON_SIZE)
         : (CAT_DS(CAT__BUTTON_SIZE) / 2 + btn_tw);
 
-    cat_draw_pill(*cx, btn_y, btn_pill_w, inner_h, cat__g.theme.highlight);
+    cat_draw_pill(*cx, btn_y, btn_pill_w, inner_h, cat__g.theme.button_glyph_bg);
     cat_draw_text(btn_font, btn_name,
                  *cx + (btn_pill_w - btn_tw) / 2,
                  btn_y + (inner_h - btn_font_h) / 2,
@@ -5085,6 +5123,32 @@ int           cat_get_screen_height(void) { return cat__g.screen_h; }
 
 /* ─── Initialization ─────────────────────────────────────────────────────── */
 
+#if CAT_PLATFORM_IS_DEVICE
+/* Scan /dev/input/event* for the gamepad (a device advertising BTN_GAMEPAD).
+   The returned fd is used purely as an idle wake source in cat_present(): the
+   kernel marks it readable the instant a button is pressed, so we can block in
+   poll() with ~zero CPU instead of busy-polling. SDL reads the actual events
+   from its own independent fd. Returns -1 if no gamepad device is found. */
+static int cat__open_gamepad_wake_fd(void) {
+    unsigned char key_bits[(KEY_MAX + 1) / 8];
+    for (int i = 0; i < 16; i++) {
+        char path[32];
+        snprintf(path, sizeof(path), "/dev/input/event%d", i);
+        int fd = open(path, O_RDONLY | O_NONBLOCK);
+        if (fd < 0) continue;
+        memset(key_bits, 0, sizeof(key_bits));
+        if (ioctl(fd, EVIOCGBIT(EV_KEY, sizeof(key_bits)), key_bits) >= 0
+            && (key_bits[BTN_GAMEPAD / 8] & (1 << (BTN_GAMEPAD % 8)))) {
+            cat_log("Input: idle poll() wake device %s (BTN_GAMEPAD)", path);
+            return fd;
+        }
+        close(fd);
+    }
+    cat_log("Input: no gamepad evdev device for poll() wake; using timed sleep");
+    return -1;
+}
+#endif
+
 int cat_init(cat_config *cfg) {
     if (cat__g.initialized) {
         cat__set_error("Already initialized");
@@ -5092,6 +5156,7 @@ int cat_init(cat_config *cfg) {
     }
 
     memset(&cat__g, 0, sizeof(cat__g));
+    cat__g.input_fd = -1;
     #if CAT_PLATFORM_IS_DEVICE
     cat__g.power_fd = -1;
     #endif
@@ -5186,6 +5251,11 @@ int cat_init(cat_config *cfg) {
     cat_log("Input backend: %s",
            cat__g.controller ? "gamecontroller" :
            (cat__g.joystick ? "joystick" : "none"));
+
+    #if CAT_PLATFORM_IS_DEVICE
+    /* Open a dedicated evdev fd used only to wake from idle poll() in cat_present(). */
+    cat__g.input_fd = cat__open_gamepad_wake_fd();
+    #endif
 
     /* Default face-button flip on TrimUI devices (firmware swaps A/B at hardware level) */
 #if defined(PLATFORM_TG5040) || defined(PLATFORM_TG5050)
@@ -5523,6 +5593,12 @@ void cat_quit(void) {
             TTF_CloseFont(cat__g.fonts[i]);
             cat__g.fonts[i] = NULL;
         }
+    }
+
+    /* Close idle-wake evdev fd */
+    if (cat__g.input_fd >= 0) {
+        close(cat__g.input_fd);
+        cat__g.input_fd = -1;
     }
 
     /* Close controller / joystick */

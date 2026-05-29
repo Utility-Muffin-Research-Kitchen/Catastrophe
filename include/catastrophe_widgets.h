@@ -998,7 +998,14 @@ int cat_list(cat_list_opts *opts, cat_list_result *result) {
             if (is_selected) {
                 int draw_label_w = cat_measure_text(item_font, label);
                 cat_text_scroll_update(&sel_scroll, draw_label_w, text_max_w, dt);
-                if (sel_scroll.active) cat_request_frame();
+                /* While paused at an end, schedule a single wake when the pause
+                   ends instead of pinning 60fps (nothing moves during the pause). */
+                if (sel_scroll.active) {
+                    if (sel_scroll.pause_timer > 0)
+                        cat_request_frame_in((uint32_t)sel_scroll.pause_timer);
+                    else
+                        cat_request_frame();
+                }
 
                 if (draw_label_w > text_max_w) {
                     SDL_Rect clip = {text_x, item_y, text_max_w, pill_h};
@@ -4812,7 +4819,13 @@ int cat_queue_viewer(const cat_queue_opts *opts) {
                 int tw = cat_measure_text(layout_title_font, item->title);
                 if (is_selected && tw > text_max_w) {
                     cat_text_scroll_update(&sel_scroll, tw, text_max_w, dt);
-                    if (sel_scroll.active) cat_request_frame();
+                    /* Schedule one wake at pause end rather than pinning 60fps. */
+                    if (sel_scroll.active) {
+                        if (sel_scroll.pause_timer > 0)
+                            cat_request_frame_in((uint32_t)sel_scroll.pause_timer);
+                        else
+                            cat_request_frame();
+                    }
                     SDL_Rect clip = { text_x, title_y, text_max_w, layout_title_fh };
                     SDL_RenderSetClipRect(cat_get_renderer(), &clip);
                     cat_draw_text(layout_title_font, item->title,
