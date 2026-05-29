@@ -5130,6 +5130,16 @@ int           cat_get_screen_height(void) { return cat__g.screen_h; }
    poll() with ~zero CPU instead of busy-polling. SDL reads the actual events
    from its own independent fd. Returns -1 if no gamepad device is found. */
 static int cat__open_gamepad_wake_fd(void) {
+    const char *override_path = getenv("CAT_INPUT_WAKE_EVENT");
+    if (override_path && override_path[0]) {
+        int fd = open(override_path, O_RDONLY | O_NONBLOCK);
+        if (fd >= 0) {
+            cat_log("Input: idle poll() wake device %s (override)", override_path);
+            return fd;
+        }
+        cat_log("Input: wake override failed for %s", override_path);
+    }
+
     unsigned char key_bits[(KEY_MAX + 1) / 8];
     for (int i = 0; i < 16; i++) {
         char path[32];
