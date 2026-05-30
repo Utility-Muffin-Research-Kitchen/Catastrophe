@@ -20,7 +20,7 @@ from typing import Callable, Iterable
 
 ATLAS_SIZE = 128
 SCALES = (1, 2, 3, 4)
-SUPERSAMPLE = 8
+SUPERSAMPLE = 12
 
 WHITE = (255, 255, 255, 255)
 BLACK = (0, 0, 0, 255)
@@ -347,13 +347,46 @@ class Canvas:
         self._paint((min_x, min_y, max_x, max_y), color, contains, erase=erase)
 
     def stroke_path(self, subpaths: Iterable[list[tuple[float, float]]], width: float, color: tuple[int, int, int, int]) -> None:
-        """Stroke flattened subpaths as round-capped polylines (round joins come from
-        overlapping caps); single-point subpaths render as a dot."""
+        """Stroke flattened subpaths as round-capped segments. All segments are unioned
+        into a single coverage test and blended once, so overlapping caps/joins don't
+        double-blend at their anti-aliased edges (which is what makes strokes look jagged).
+        Single-point subpaths render as a dot."""
+        half = width / 2.0
+        hh = half * half
+        # Each segment: (x1, y1, dx, dy, len_sq); zero-length entries act as dots.
+        segs: list[tuple[float, float, float, float, float]] = []
         for sp in subpaths:
             if len(sp) == 1:
-                self.circle(sp[0][0], sp[0][1], width / 2.0, color)
-            elif len(sp) >= 2:
-                self.polyline(sp, width, color)
+                segs.append((sp[0][0], sp[0][1], 0.0, 0.0, 0.0))
+            else:
+                for (x1, y1), (x2, y2) in zip(sp, sp[1:]):
+                    dx, dy = x2 - x1, y2 - y1
+                    segs.append((x1, y1, dx, dy, dx * dx + dy * dy))
+        if not segs:
+            return
+        pad = half + 1.0
+        xs = [s[0] for s in segs] + [s[0] + s[2] for s in segs]
+        ys = [s[1] for s in segs] + [s[1] + s[3] for s in segs]
+        bbox = (min(xs) - pad, min(ys) - pad, max(xs) + pad, max(ys) + pad)
+
+        def contains(px: float, py: float) -> bool:
+            for x1, y1, dx, dy, length_sq in segs:
+                if length_sq == 0.0:
+                    ex, ey = px - x1, py - y1
+                    if ex * ex + ey * ey <= hh:
+                        return True
+                    continue
+                t = ((px - x1) * dx + (py - y1) * dy) / length_sq
+                if t < 0.0:
+                    t = 0.0
+                elif t > 1.0:
+                    t = 1.0
+                ex, ey = px - (x1 + t * dx), py - (y1 + t * dy)
+                if ex * ex + ey * ey <= hh:
+                    return True
+            return False
+
+        self._paint(bbox, color, contains)
 
     def png_bytes(self) -> bytes:
         raw = bytearray()
@@ -511,7 +544,7 @@ TABLER_FILLED = {
 TABLER_STROKE = 2.0
 
 
-def _cubic(p0, p1, p2, p3, n: int = 16):
+def _cubic(p0, p1, p2, p3, n: int = 28):
     out = []
     for i in range(1, n + 1):
         t = i / n
@@ -522,7 +555,7 @@ def _cubic(p0, p1, p2, p3, n: int = 16):
     return out
 
 
-def _quad(p0, p1, p2, n: int = 14):
+def _quad(p0, p1, p2, n: int = 22):
     out = []
     for i in range(1, n + 1):
         t = i / n
@@ -572,7 +605,7 @@ def _arc(p0, rx, ry, rot_deg, large, sweep, p1):
         dtheta -= 2 * math.pi
     elif sweep != 0 and dtheta < 0:
         dtheta += 2 * math.pi
-    steps = max(2, int(math.ceil(abs(dtheta) / (math.pi / 8.0))))
+    steps = max(2, int(math.ceil(abs(dtheta) / (math.pi / 16.0))))
     out = []
     for i in range(1, steps + 1):
         t = theta1 + dtheta * i / steps
