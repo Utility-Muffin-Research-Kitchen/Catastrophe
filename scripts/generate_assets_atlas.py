@@ -20,7 +20,7 @@ from typing import Callable, Iterable
 
 ATLAS_SIZE = 128
 SCALES = (1, 2, 3, 4)
-SUPERSAMPLE = 4
+SUPERSAMPLE = 8
 
 WHITE = (255, 255, 255, 255)
 BLACK = (0, 0, 0, 255)
@@ -313,9 +313,11 @@ class Canvas:
         pad = width + 1.0
         self._paint((cx - radius - pad, cy - radius - pad, cx + radius + pad, cy + radius + pad), color, contains)
 
-    def fill_path(self, subpaths: Iterable[list[tuple[float, float]]], color: tuple[int, int, int, int]) -> None:
+    def fill_path(self, subpaths: Iterable[list[tuple[float, float]]], color: tuple[int, int, int, int],
+                  erase: bool = False) -> None:
         """Fill flattened subpaths using the nonzero winding rule (so reverse-wound
-        subpaths punch holes, matching SVG's default fill-rule)."""
+        subpaths punch holes, matching SVG's default fill-rule). With erase=True the
+        covered area is cleared instead of painted (used for the charging-bolt cutout)."""
         edges: list[tuple[float, float, float, float]] = []
         for sp in subpaths:
             if len(sp) < 2:
@@ -342,7 +344,7 @@ class Canvas:
                         wn -= 1
             return wn != 0
 
-        self._paint((min_x, min_y, max_x, max_y), color, contains)
+        self._paint((min_x, min_y, max_x, max_y), color, contains, erase=erase)
 
     def stroke_path(self, subpaths: Iterable[list[tuple[float, float]]], width: float, color: tuple[int, int, int, int]) -> None:
         """Stroke flattened subpaths as round-capped polylines (round joins come from
@@ -413,8 +415,11 @@ def write_png_rgba8(width: int, height: int, raw_scanlines: bytes) -> bytes:
 
 
 def draw_battery(c: Canvas, x: float, y: float, color: tuple[int, int, int, int]) -> None:
-    c.rounded_rect(x + 0.4, y + 0.4, 15.8, 9.2, 1.4, color)
-    c.erase_rect(x + 2.0, y + 2.0, 12.2, 6.0)
+    # Body outline (1px border via erased interior) + a Tabler-style terminal nub on the right.
+    # Interior right edge sits at x+15 so the runtime fill (x+3, width 12) lands flush inside it.
+    c.rounded_rect(x + 0.2, y + 0.4, 15.8, 9.2, 1.5, color)
+    c.erase_rect(x + 1.2, y + 1.4, 13.8, 7.2)
+    c.rect(x + 16.0, y + 3.4, 1.0, 3.2, color)
 
 
 # ── Tabler SVG path rendering ────────────────────────────────────────────────
@@ -445,27 +450,6 @@ TABLER_OUTLINE = {
         "M3 3l18 18",
         "M16.438 16.45l-4.438 3.55v-8m0 -4v-4l5 4l-2.776 2.22m-2.222 1.779l-5 4",
     ),
-    "sun": (
-        "M8 12a4 4 0 1 0 8 0a4 4 0 1 0 -8 0",
-        "M3 12h1m8 -9v1m8 8h1m-9 8v1m-6.4 -15.4l.7 .7m12.1 -.7l-.7 .7m0 11.4l.7 .7m-12.1 -.7l-.7 .7",
-    ),
-    "temperature": (
-        "M10 13.5a4 4 0 1 0 4 0v-8.5a2 2 0 0 0 -4 0v8.5",
-        "M10 9l4 0",
-    ),
-    "settings": (
-        "M10.325 4.317c.426 -1.756 2.924 -1.756 3.35 0a1.724 1.724 0 0 0 2.573 1.066c1.543 -.94 3.31 .826 2.37 2.37a1.724 1.724 0 0 0 1.065 2.572c1.756 .426 1.756 2.924 0 3.35a1.724 1.724 0 0 0 -1.066 2.573c.94 1.543 -.826 3.31 -2.37 2.37a1.724 1.724 0 0 0 -2.572 1.065c-.426 1.756 -2.924 1.756 -3.35 0a1.724 1.724 0 0 0 -2.573 -1.066c-1.543 .94 -3.31 -.826 -2.37 -2.37a1.724 1.724 0 0 0 -1.065 -2.572c-1.756 -.426 -1.756 -2.924 0 -3.35a1.724 1.724 0 0 0 1.066 -2.573c-.94 -1.543 .826 -3.31 2.37 -2.37c1 .608 2.296 .07 2.572 -1.065",
-        "M9 12a3 3 0 1 0 6 0a3 3 0 0 0 -6 0",
-    ),
-    "lock": (
-        "M5 13a2 2 0 0 1 2 -2h10a2 2 0 0 1 2 2v6a2 2 0 0 1 -2 2h-10a2 2 0 0 1 -2 -2v-6",
-        "M11 16a1 1 0 1 0 2 0a1 1 0 0 0 -2 0",
-        "M8 11v-4a4 4 0 1 1 8 0v4",
-    ),
-    "circle-check": (
-        "M3 12a9 9 0 1 0 18 0a9 9 0 1 0 -18 0",
-        "M9 12l2 2l4 -4",
-    ),
     "power": (
         "M7 6a7.75 7.75 0 1 0 10 0",
         "M12 4l0 8",
@@ -474,9 +458,6 @@ TABLER_OUTLINE = {
         "M20 11a8.1 8.1 0 0 0 -15.5 -2m-.5 -4v4h4",
         "M4 13a8.1 8.1 0 0 0 15.5 2m.5 4v-4h-4",
     ),
-    "moon": (
-        "M12 3c.132 0 .263 0 .393 0a7.5 7.5 0 0 0 7.92 12.446a9 9 0 1 1 -8.313 -12.454l0 .008",
-    ),
     "cloud-download": (
         "M19 18a3.5 3.5 0 0 0 0 -7h-1a5 4.5 0 0 0 -11 -2a4.6 4.4 0 0 0 -2.1 8.4",
         "M12 13l0 9",
@@ -484,8 +465,38 @@ TABLER_OUTLINE = {
     ),
 }
 
+# Lightning bolt (outline path) — used as an erase mask for the charging fill cell.
+BOLT_PATH = "M13 3l0 7l6 0l-8 11l0 -7l-6 0l8 -11"
+
 # Filled icons (rendered with nonzero-winding fill so cutouts punch holes).
 TABLER_FILLED = {
+    "sun": (
+        "M12 19a1 1 0 0 1 .993 .883l.007 .117v1a1 1 0 0 1 -1.993 .117l-.007 -.117v-1a1 1 0 0 1 1 -1z",
+        "M18.313 16.91l.094 .083l.7 .7a1 1 0 0 1 -1.32 1.497l-.094 -.083l-.7 -.7a1 1 0 0 1 1.218 -1.567l.102 .07z",
+        "M7.007 16.993a1 1 0 0 1 .083 1.32l-.083 .094l-.7 .7a1 1 0 0 1 -1.497 -1.32l.083 -.094l.7 -.7a1 1 0 0 1 1.414 0z",
+        "M4 11a1 1 0 0 1 .117 1.993l-.117 .007h-1a1 1 0 0 1 -.117 -1.993l.117 -.007h1z",
+        "M21 11a1 1 0 0 1 .117 1.993l-.117 .007h-1a1 1 0 0 1 -.117 -1.993l.117 -.007h1z",
+        "M6.213 4.81l.094 .083l.7 .7a1 1 0 0 1 -1.32 1.497l-.094 -.083l-.7 -.7a1 1 0 0 1 1.217 -1.567l.102 .07z",
+        "M19.107 4.893a1 1 0 0 1 .083 1.32l-.083 .094l-.7 .7a1 1 0 0 1 -1.497 -1.32l.083 -.094l.7 -.7a1 1 0 0 1 1.414 0z",
+        "M12 2a1 1 0 0 1 .993 .883l.007 .117v1a1 1 0 0 1 -1.993 .117l-.007 -.117v-1a1 1 0 0 1 1 -1z",
+        "M12 7a5 5 0 1 1 -4.995 5.217l-.005 -.217l.005 -.217a5 5 0 0 1 4.995 -4.783z",
+    ),
+    "temperature": (
+        # No Tabler filled variant; fill the outline body for a solid thermometer.
+        "M10 13.5a4 4 0 1 0 4 0v-8.5a2 2 0 0 0 -4 0v8.5",
+    ),
+    "circle-check": (
+        "M17 3.34a10 10 0 1 1 -14.995 8.984l-.005 -.324l.005 -.324a10 10 0 0 1 14.995 -8.336zm-1.293 5.953a1 1 0 0 0 -1.32 -.083l-.094 .083l-3.293 3.292l-1.293 -1.292l-.094 -.083a1 1 0 0 0 -1.403 1.403l.083 .094l2 2l.094 .083a1 1 0 0 0 1.226 0l.094 -.083l4 -4l.083 -.094a1 1 0 0 0 -.083 -1.32z",
+    ),
+    "lock": (
+        "M12 2a5 5 0 0 1 5 5v3a3 3 0 0 1 3 3v6a3 3 0 0 1 -3 3h-10a3 3 0 0 1 -3 -3v-6a3 3 0 0 1 3 -3v-3a5 5 0 0 1 5 -5m0 12a2 2 0 0 0 -1.995 1.85l-.005 .15a2 2 0 1 0 2 -2m0 -10a3 3 0 0 0 -3 3v3h6v-3a3 3 0 0 0 -3 -3",
+    ),
+    "settings": (
+        "M14.647 4.081a.724 .724 0 0 0 1.08 .448c2.439 -1.485 5.23 1.305 3.745 3.744a.724 .724 0 0 0 .447 1.08c2.775 .673 2.775 4.62 0 5.294a.724 .724 0 0 0 -.448 1.08c1.485 2.439 -1.305 5.23 -3.744 3.745a.724 .724 0 0 0 -1.08 .447c-.673 2.775 -4.62 2.775 -5.294 0a.724 .724 0 0 0 -1.08 -.448c-2.439 1.485 -5.23 -1.305 -3.745 -3.744a.724 .724 0 0 0 -.447 -1.08c-2.775 -.673 -2.775 -4.62 0 -5.294a.724 .724 0 0 0 .448 -1.08c-1.485 -2.439 1.305 -5.23 3.744 -3.745a.722 .722 0 0 0 1.08 -.447c.673 -2.775 4.62 -2.775 5.294 0zm-2.647 4.919a3 3 0 1 0 0 6a3 3 0 0 0 0 -6",
+    ),
+    "moon": (
+        "M12 1.992a10 10 0 1 0 9.236 13.838c.341 -.82 -.476 -1.644 -1.298 -1.31a6.5 6.5 0 0 1 -6.864 -10.787l.077 -.08c.551 -.63 .113 -1.653 -.758 -1.653h-.266l-.068 -.006l-.06 -.002z",
+    ),
     "headphones": (
         "M21 18a3 3 0 0 1 -2.824 2.995l-.176 .005h-1a3 3 0 0 1 -2.995 -2.824l-.005 -.176v-3a3 3 0 0 1 2.824 -2.995l.176 -.005h1c.351 0 .688 .06 1 .171v-.171a7 7 0 0 0 -13.996 -.24l-.004 .24v.17c.25 -.088 .516 -.144 .791 -.163l.209 -.007h1a3 3 0 0 1 2.995 2.824l.005 .176v3a3 3 0 0 1 -2.824 2.995l-.176 .005h-1a3 3 0 0 1 -2.995 -2.824l-.005 -.176v-6a9 9 0 0 1 17.996 -.265l.004 .265v6z",
     ),
@@ -775,7 +786,11 @@ def render(canvas: Canvas) -> None:
     draw_battery(canvas, 66, 51, RED)
     canvas.rect(81, 33, 12, 6, WHITE)
     canvas.rect(1, 55, 12, 6, RED)
-    canvas.polygon([(84, 41), (90, 41), (87, 43.1), (91, 43.1), (84, 47), (86.2, 44.4), (82, 44.4)], WHITE)
+    # Charging fill: a solid bar with a lightning-bolt-shaped hole erased out (NextUI-style).
+    canvas.rounded_rect(81, 41, 12, 6, 1.2, WHITE)
+    _bolt = parse_svg_path(BOLT_PATH)
+    _bs, _btx, _bty = _fit(_bolt, 81, 41, 12, 6, 1.0)
+    canvas.fill_path(_xform(_bolt, _bs, _btx, _bty), WHITE, erase=True)
 
     # Hardware and status glyphs (Tabler-derived; draw_volume kept procedural because
     # ASSET_VOLUME_MUTE samples the left sub-rect of the same drawing).
