@@ -33,15 +33,15 @@
 | `ASSET_WIFI_OFF` | `40,104,12,12` | Tabler wifi-off |
 | `ASSET_BLUETOOTH` | `53,104,12,12` | Tabler bluetooth |
 | `ASSET_BLUETOOTH_OFF` | `66,104,12,12` | Tabler bluetooth-off |
-| `ASSET_AUDIO` | `79,104,12,12` | Tabler headphones |
-| `ASSET_CONTROLLER` | `92,104,12,12` | Tabler device-gamepad-2 |
+| `ASSET_AUDIO` | `79,104,12,12` | Tabler headphones, filled |
+| `ASSET_CONTROLLER` | `92,104,12,12` | Tabler device-gamepad-2, filled |
 | `ASSET_CHECKCIRCLE` | `1,117,10,10` | Tabler circle-check |
 | `ASSET_LOCK` | `12,116,8,11` | Tabler lock |
 | `ASSET_SETTINGS` | `21,117,10,10` | Tabler settings |
-| `ASSET_STORE` | `66,117,10,10` | Tabler building-store |
-| `ASSET_GAMEPAD` | `91,51,17,10` | Tabler device-gamepad-2 |
+| `ASSET_STORE` | `66,117,10,10` | Tabler cloud-download |
+| `ASSET_GAMEPAD` | `91,51,17,10` | Tabler device-gamepad, filled |
 | `ASSET_POWEROFF` | `43,117,10,10` | Tabler power |
-| `ASSET_RESTART` | `54,119,11,8` | Tabler refresh |
+| `ASSET_RESTART` | `54,119,11,8` | Tabler refresh, filled-style |
 | `ASSET_SUSPEND` | `32,117,10,10` | Tabler moon |
 | `LEGACY_WIFI_SMALL` | `96,40,12,8` | legacy unmapped cluster |
 | `LEGACY_BLACK_DOT` | `15,55,4,4` | legacy unmapped cluster |

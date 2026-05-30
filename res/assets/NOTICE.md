@@ -10,11 +10,15 @@ Semantic glyphs are derived from Tabler Icons v3.44.0:
 - Icon browser: https://tabler.io/icons
 - License: MIT
 
-The generator references these Tabler icon concepts by name: `brightness`, `sun`,
-`temperature`, `volume`, `volume-2`, `battery`, `bolt`, `chevron-up`,
-`chevron-down`, `wifi`, `wifi-off`, `bluetooth`, `bluetooth-off`, `headphones`,
-`device-gamepad-2`, `circle-check`, `lock`, `settings`, `building-store`,
-`power`, `refresh`, and `moon`.
+The generator rasterizes the actual Tabler vector path data for these icons (the `d`
+strings are embedded in `scripts/generate_assets_atlas.py`): `sun`, `temperature`,
+`wifi`, `wifi-off`, `bluetooth`, `bluetooth-off`, `headphones`, `device-gamepad`,
+`device-gamepad-2`, `circle-check`, `lock`, `settings`, `cloud-download`, `power`,
+`refresh`, and `moon`. Outline icons are rendered stroked (Tabler stroke-width 2);
+filled icons are filled with the nonzero winding rule so their cutouts read as holes.
+Each path is fit into its NextUI-compatible sprite rect. The remaining swatches
+(pills, dots, bars, hole, battery, volume) are procedural NextUI primitives, not
+Tabler glyphs.
 
 ## MIT License Notice
 

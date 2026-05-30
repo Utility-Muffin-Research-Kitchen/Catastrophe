@@ -59,7 +59,7 @@ WARN_CFLAGS := -Wall -Wextra -Wno-unused-parameter
 .PHONY: all native mac linux windows tg5040 tg5050 my355 assets package deploy clean help FORCE
 
 assets:
-	python3 scripts/generate_assets_atlas.py --out-dir "$(ASSETS_DIR)" --manifest
+	python3 scripts/generate_assets_atlas.py --out-dir "$(ASSETS_DIR)" --manifest --preview
 
 # ─── Native (auto-detect host OS) ─────────────────────────────────────
 
