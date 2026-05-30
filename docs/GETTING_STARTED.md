@@ -226,12 +226,12 @@ make run-mac-download  # launches the download/status bar example
 CAT_WINDOW_WIDTH=1024 CAT_WINDOW_HEIGHT=768 make run-mac-demo
 ```
 
-The desktop preview renders pills procedurally (anti-aliased rounded rectangles) when no
-sprite assets are present. Point `CAT_STATUS_ASSETS_DIR` at a folder containing
-`assets@1x.png` through `assets@4x.png` if you want sprite-based pills locally.
-`run-mac-demo` and `run-mac-download` automatically point `CAT_STATUS_ASSETS_DIR`,
-`CAT_THEMES_DIR`, and battery/wifi defaults from the build tree unless you already exported your
-own override values.
+The desktop preview uses generated status/control sprites from `res/assets/` by default.
+Run `make assets` to regenerate `assets@1x.png` through `assets@4x.png`.
+Point `CAT_STATUS_ASSETS_DIR` at another folder with the same filenames if you want to test
+alternate sprite assets locally. `run-mac-demo` and `run-mac-download` automatically point
+`CAT_STATUS_ASSETS_DIR`, `CAT_THEMES_DIR`, and battery/wifi defaults from the repo unless
+you already exported your own override values.
 
 ### Linux
 

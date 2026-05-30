@@ -10,6 +10,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - **File Picker widget** (`catastrophe_widgets.h`): new `cat_file_picker` widget for browsing the filesystem and selecting files or directories. Features: configurable mode (files only, directories only, or both), sorted directory listing with folders first, visual folder/file differentiation via trailing chevron `>` and uppercase extension labels, inline folder creation in dir-capable modes via `cat_keyboard()`, extension filtering, hidden-file option, and enforced rooted browsing (`SDCARD_PATH` on device, `$HOME` by default on desktop, or a caller-provided `root_path`). Demo entries added for all three modes.
 - **Live footer demo** (`examples/demo/main.c`, `docs/DEMO_COVERAGE.md`): added a `Live Footer` list demo that simulates preview state, updates the `Y` footer label while the cursor moves, and uses `cat_request_frame_in(100)` so the label reverts automatically when preview expires.
+- **Generated status/control atlas** (`res/assets/`, `scripts/generate_assets_atlas.py`, `Makefile`): added a tracked MIT-compatible replacement for the old NextUI preview sprites, plus `make assets` for deterministic regeneration.
 
 ### Changed
 
@@ -24,6 +25,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 - **MLP1 warning cleanup** (`catastrophe.h`): stylesheet wallpaper path formatting now uses a bounded buffer sized for the full theme directory/name/wallpaper path and checks `snprintf()` before reloading the background. Platform sysfs and power-command helpers are now compiled only for the backends that use them, avoiding unused-helper warnings without broad warning suppression.
+- **macOS native link** (`Makefile`): link desktop examples with Cocoa so the window activation helper resolves Objective-C runtime symbols.
 
 ## [v1.1.0] - 2026-03-30
 

@@ -56,6 +56,9 @@ CAT_PREVIEW_CHARGING=0 \
 make run-mac-demo
 ```
 
+The status/control sprites used by desktop previews are generated into `res/assets/`.
+Run `make assets` to regenerate `assets@1x.png` through `assets@4x.png`.
+
 For platform-specific dependency install commands, see [Getting Started](docs/GETTING_STARTED.md#prerequisites).
 
 ### 3. Build for Device

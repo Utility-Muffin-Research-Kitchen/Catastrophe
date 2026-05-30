@@ -11,6 +11,7 @@
 #   make tg5050       — Cross-compile for TrimUI Smart Pro S
 #   make my355        — Cross-compile for Miyoo Flip
 #   make all          — Build for all device platforms
+#   make assets       — Regenerate tracked status/control atlas PNGs
 #   make package      — Build all + create .pakz archives
 #   make deploy       — Deploy to connected device via adb
 #   make clean        — Remove build artifacts
@@ -42,6 +43,7 @@ STAGING_DIR  := $(BUILD_DIR)/staging
 EXAMPLES_DIR := examples
 INCLUDE_DIR  := include
 RES_DIR      := res
+ASSETS_DIR   := $(RES_DIR)/assets
 CACHE_DIR    := .cache
 CJSON_DIR    := include/cjson
 
@@ -54,7 +56,10 @@ WARN_CFLAGS := -Wall -Wextra -Wno-unused-parameter
 
 # ─── Phony targets ───────────────────────────────────────────────────────
 
-.PHONY: all native mac linux windows tg5040 tg5050 my355 package deploy clean help FORCE
+.PHONY: all native mac linux windows tg5040 tg5050 my355 assets package deploy clean help FORCE
+
+assets:
+	python3 scripts/generate_assets_atlas.py --out-dir "$(ASSETS_DIR)" --manifest
 
 # ─── Native (auto-detect host OS) ─────────────────────────────────────
 
@@ -78,6 +83,7 @@ else
 CURL_CFLAGS :=
 CURL_LDFLAGS :=
 endif
+MAC_FRAMEWORKS := -framework Cocoa
 
 mac-%: FORCE
 	@echo "════════ Building $* for macOS ════════"
@@ -91,11 +97,13 @@ mac-%: FORCE
 		$(EXAMPLES_DIR)/$*/main.c $(CJSON_SRC) \
 		$(shell pkg-config --libs sdl2 SDL2_ttf SDL2_image) \
 		$(CURL_LDFLAGS) \
-		-lm -lpthread
+		-lm -lpthread \
+		$(MAC_FRAMEWORKS)
 	@cp -f $(RES_DIR)/font.ttf $(BUILD_DIR)/mac/$*/font.ttf
 	@cp -f $(RES_DIR)/font.LICENSE.txt $(BUILD_DIR)/mac/$*/font.LICENSE.txt
 	@cp -f $(RES_DIR)/*.png $(BUILD_DIR)/mac/$*/ 2>/dev/null || true
 	@mkdir -p $(BUILD_DIR)/mac/$*/res
+	@cp -Rf $(ASSETS_DIR) $(BUILD_DIR)/mac/$*/res/ 2>/dev/null || true
 	@cp -Rf $(RES_DIR)/themes $(BUILD_DIR)/mac/$*/res/ 2>/dev/null || true
 	@cp -Rf $(RES_DIR)/fonts  $(BUILD_DIR)/mac/$*/res/ 2>/dev/null || true
 	@echo "→ $(BUILD_DIR)/mac/$*/$*"
@@ -113,6 +121,9 @@ run-mac-$(1): mac-$(1)
 	fi; \
 	if [ -z "$$$${CAT_FONTS_DIR:-}" ]; then \
 		export CAT_FONTS_DIR="$(CURDIR)/themes/Allium-Themes/Fonts"; \
+	fi; \
+	if [ -z "$$$${CAT_STATUS_ASSETS_DIR:-}" ]; then \
+		export CAT_STATUS_ASSETS_DIR="$(CURDIR)/$(ASSETS_DIR)"; \
 	fi; \
 	if [ -z "$$$${CAT_PREVIEW_WIFI_STRENGTH:-}" ]; then \
 		export CAT_PREVIEW_WIFI_STRENGTH=3; \
@@ -149,10 +160,16 @@ linux-%:
 	@cp -f $(RES_DIR)/font.ttf $(BUILD_DIR)/linux/$*/font.ttf
 	@cp -f $(RES_DIR)/font.LICENSE.txt $(BUILD_DIR)/linux/$*/font.LICENSE.txt
 	@cp -f $(RES_DIR)/*.png $(BUILD_DIR)/linux/$*/ 2>/dev/null || true
+	@mkdir -p $(BUILD_DIR)/linux/$*/res
+	@cp -Rf $(ASSETS_DIR) $(BUILD_DIR)/linux/$*/res/ 2>/dev/null || true
 	@echo "→ $(BUILD_DIR)/linux/$*/$*"
 
 run-linux-%: linux-%
-	@cd $(BUILD_DIR)/linux/$* && ./$*
+	@set -euo pipefail; \
+	if [ -z "$${CAT_STATUS_ASSETS_DIR:-}" ]; then \
+		export CAT_STATUS_ASSETS_DIR="$(CURDIR)/$(ASSETS_DIR)"; \
+	fi; \
+	cd $(BUILD_DIR)/linux/$* && ./$*
 
 run-linux: run-linux-hello
 
@@ -176,10 +193,16 @@ windows-%:
 	@cp -f $(RES_DIR)/font.ttf $(BUILD_DIR)/windows/$*/font.ttf
 	@cp -f $(RES_DIR)/font.LICENSE.txt $(BUILD_DIR)/windows/$*/font.LICENSE.txt
 	@cp -f $(RES_DIR)/*.png $(BUILD_DIR)/windows/$*/ 2>/dev/null || true
+	@mkdir -p $(BUILD_DIR)/windows/$*/res
+	@cp -Rf $(ASSETS_DIR) $(BUILD_DIR)/windows/$*/res/ 2>/dev/null || true
 	@echo "→ $(BUILD_DIR)/windows/$*/$*.exe"
 
 run-windows-%: windows-%
-	@cd $(BUILD_DIR)/windows/$* && ./$*.exe
+	@set -euo pipefail; \
+	if [ -z "$${CAT_STATUS_ASSETS_DIR:-}" ]; then \
+		export CAT_STATUS_ASSETS_DIR="$(CURDIR)/$(ASSETS_DIR)"; \
+	fi; \
+	cd $(BUILD_DIR)/windows/$* && ./$*.exe
 
 run-windows: run-windows-hello
 
@@ -338,6 +361,7 @@ help:
 	@echo "  make mac            Build examples for macOS"
 	@echo "  make linux          Build examples for Linux"
 	@echo "  make windows        Build examples for Windows (MSYS2/MinGW)"
+	@echo "  make assets         Regenerate tracked status/control atlas PNGs"
 	@echo ""
 	@echo "  Device (cross-compile via Docker):"
 	@echo "  make tg5040         Cross-compile for TrimUI Brick/Smart Pro"

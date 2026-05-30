@@ -212,12 +212,14 @@ for that single icon so width calculation and drawing stay aligned.
 
 On device, battery and wifi icons are rendered from the status spritesheet at
 `$CAT_STATUS_ASSETS_DIR/assets@Nx.png` when available; otherwise pills are drawn procedurally.
-On desktop, set `CAT_STATUS_ASSETS_DIR` to a folder containing `assets@1x.png` through
-`assets@4x.png` for sprite-based pills, or leave it unset for the procedural fallback.
+On desktop, the native run targets default `CAT_STATUS_ASSETS_DIR` to the generated
+`res/assets/` atlas. Set `CAT_STATUS_ASSETS_DIR` to another folder containing `assets@1x.png`
+through `assets@4x.png` to override it, or leave it unset outside the run targets for the
+procedural fallback.
 
 Desktop preview environment variables:
 
-- `CAT_STATUS_ASSETS_DIR`: directory containing `assets@Nx.png` (optional)
+- `CAT_STATUS_ASSETS_DIR`: directory containing `assets@Nx.png` (defaults to `res/assets/` in native run targets)
 - `CAT_PREVIEW_WIFI_STRENGTH`: preview wifi strength (`0`..`3`)
 - `CAT_PREVIEW_BATTERY_PERCENT`: preview battery level (`0`..`100`)
 - `CAT_PREVIEW_CHARGING`: preview charging state (`0` or `1`)
