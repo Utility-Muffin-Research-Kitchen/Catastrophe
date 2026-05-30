@@ -21,6 +21,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Options list demo regression coverage** (`examples/demo/main.c`, `docs/DEMO_COVERAGE.md`): the `Options List` demo now includes long clickable path/URL rows so 640x480 layouts exercise both long-value truncation and long label+value splitting.
 - **Selection wrapped-message layout** (`catastrophe_widgets.h`, `examples/demo/main.c`, `docs/DEMO_COVERAGE.md`): `cat_selection()` now places its option pills below the full wrapped message height instead of assuming a single text line, preventing overlap on narrow layouts and adding demo coverage for the wrapped-prompt case.
 
+### Fixed
+
+- **MLP1 warning cleanup** (`catastrophe.h`): stylesheet wallpaper path formatting now uses a bounded buffer sized for the full theme directory/name/wallpaper path and checks `snprintf()` before reloading the background. Platform sysfs and power-command helpers are now compiled only for the backends that use them, avoiding unused-helper warnings without broad warning suppression.
+
 ## [v1.1.0] - 2026-03-30
 
 ### Added

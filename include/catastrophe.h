@@ -1761,16 +1761,22 @@ int cat_stylesheet_apply(cat_stylesheet *s) {
     /* Load wallpaper if present; otherwise clear stale texture so
        cat_draw_background() falls through to the solid ui.background_color. */
     if (s->wallpaper[0]) {
-        char wpath[1280];
+        char wpath[sizeof(cat__g.active_theme_dir) +
+                   sizeof(cat__g.active_theme) +
+                   sizeof(s->wallpaper) + 2u];
+        int needed = 0;
         if (s->wallpaper[0] == '/') {
-            strncpy(wpath, s->wallpaper, sizeof(wpath) - 1);
+            needed = snprintf(wpath, sizeof(wpath), "%s", s->wallpaper);
         } else if (cat__g.active_theme_dir[0] && cat__g.active_theme[0]) {
-            snprintf(wpath, sizeof(wpath), "%s/%s/%s",
-                     cat__g.active_theme_dir, cat__g.active_theme, s->wallpaper);
+            needed = snprintf(wpath, sizeof(wpath), "%s/%s/%s",
+                              cat__g.active_theme_dir, cat__g.active_theme, s->wallpaper);
         } else {
-            strncpy(wpath, s->wallpaper, sizeof(wpath) - 1);
+            needed = snprintf(wpath, sizeof(wpath), "%s", s->wallpaper);
         }
-        wpath[sizeof(wpath) - 1] = '\0';
+        if (needed < 0 || (size_t)needed >= sizeof(wpath)) {
+            cat__set_error("Wallpaper path too long: %s", s->wallpaper);
+            return CAT_ERROR;
+        }
         cat_reload_background(wpath);
     } else if (cat__g.bg_texture) {
         SDL_DestroyTexture(cat__g.bg_texture);
@@ -4283,6 +4289,7 @@ static bool cat__is_charging(void) {
 
 #define CAT__CPU_TEMP_PATH "/sys/devices/virtual/thermal/thermal_zone0/temp"
 
+#if defined(CAT__CPU_SPEED_PATH) || defined(CAT__FAN_STATE_PATH)
 static int cat__write_sysfs_int(const char *path, int value) {
     FILE *f = fopen(path, "w");
     if (!f) return CAT_ERROR;
@@ -4290,7 +4297,9 @@ static int cat__write_sysfs_int(const char *path, int value) {
     fclose(f);
     return CAT_OK;
 }
+#endif
 
+#if defined(CAT__CPU_SPEED_PATH)
 static int cat__write_sysfs_str(const char *path, const char *value) {
     FILE *f = fopen(path, "w");
     if (!f) return CAT_ERROR;
@@ -4298,6 +4307,7 @@ static int cat__write_sysfs_str(const char *path, const char *value) {
     fclose(f);
     return CAT_OK;
 }
+#endif
 
 #if defined(PLATFORM_TG5050) && defined(CAT__FAN_STATE_PATH)
 static bool cat__is_all_digits(const char *s) {
@@ -4951,6 +4961,7 @@ static void cat__drain_power_events(int fd) {
     }
 }
 
+#if defined(PLATFORM_MY355) || defined(PLATFORM_TG5040) || defined(PLATFORM_TG5050)
 static int cat__run_power_command(const char *action, const char *command) {
     errno = 0;
     int rc = system(command);
@@ -4976,6 +4987,7 @@ static int cat__run_power_command(const char *action, const char *command) {
     cat_log("Power: %s command returned status=%d: cmd='%s'", action, rc, command);
     return rc;
 }
+#endif
 
 static void *cat__power_thread_func(void *arg) {
     (void)arg;
