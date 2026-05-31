@@ -319,7 +319,16 @@ int cat_detail_screen(cat_detail_opts *opts, cat_detail_result *result);
  * Color Picker
  * ═══════════════════════════════════════════════════════════════════════════ */
 
+/* Color context for the picker's live preview strip. Pass NULL to skip. */
+typedef struct {
+    struct { const char *label; ap_color color; } roles[8];
+    int role_count;
+    int active_role;   /* Index of the role being edited (-1 = none) */
+} cat_color_picker_context;
+
 int cat_color_picker(ap_color initial, ap_color *result);
+int cat_color_picker_ctx(ap_color initial, ap_color *result,
+                         cat_color_picker_context *context);
 
 /* ═══════════════════════════════════════════════════════════════════════════
  * Help Overlay
@@ -3228,104 +3237,323 @@ static const ap_color cat__picker_colors[25] = {
     {  0, 128, 128, 255}, {128,   0, 128, 255}, {255, 255, 255, 255}, {192, 192, 192, 255}, {  0,   0,   0, 255},
 };
 
-int cat_color_picker(ap_color initial, ap_color *result) {
+/* ─── HSL conversion helpers ───────────────────────────────────────────── */
+
+static float cat__hsl_hue2rgb(float p, float q, float t) {
+    if (t < 0.0f) t += 1.0f;
+    if (t > 1.0f) t -= 1.0f;
+    if (t < 1.0f / 6.0f) return p + (q - p) * 6.0f * t;
+    if (t < 1.0f / 2.0f) return q;
+    if (t < 2.0f / 3.0f) return p + (q - p) * (2.0f / 3.0f - t) * 6.0f;
+    return p;
+}
+
+static void cat__hsl_to_rgb(float h, float s, float l,
+                             uint8_t *r, uint8_t *g, uint8_t *b) {
+    if (s <= 0.0f) {
+        uint8_t v = (uint8_t)(l * 255.0f);
+        *r = *g = *b = v;
+        return;
+    }
+    float q = (l < 0.5f) ? (l * (1.0f + s)) : (l + s - l * s);
+    float p = 2.0f * l - q;
+    *r = (uint8_t)(cat__hsl_hue2rgb(p, q, h + 1.0f / 3.0f) * 255.0f);
+    *g = (uint8_t)(cat__hsl_hue2rgb(p, q, h) * 255.0f);
+    *b = (uint8_t)(cat__hsl_hue2rgb(p, q, h - 1.0f / 3.0f) * 255.0f);
+}
+
+static void cat__rgb_to_hsl(uint8_t r, uint8_t g, uint8_t b,
+                             float *h, float *s, float *l) {
+    float rf = r / 255.0f, gf = g / 255.0f, bf = b / 255.0f;
+    float max = rf > gf ? (rf > bf ? rf : bf) : (gf > bf ? gf : bf);
+    float min = rf < gf ? (rf < bf ? rf : bf) : (gf < bf ? gf : bf);
+    float d = max - min;
+    *l = (max + min) / 2.0f;
+    if (d < 0.001f) { *h = 0.0f; *s = 0.0f; return; }
+    *s = (*l > 0.5f) ? (d / (2.0f - max - min)) : (d / (max + min));
+    if (max == rf)      *h = (gf - bf) / d + (gf < bf ? 6.0f : 0.0f);
+    else if (max == gf) *h = (bf - rf) / d + 2.0f;
+    else                *h = (rf - gf) / d + 4.0f;
+    *h /= 6.0f;
+}
+
+static float cat__field_y_to_lightness(int y, int field_h) {
+    int mid = field_h / 2;
+    if (y <= mid) return 1.0f - ((float)y / (float)mid) * 0.5f;
+    return 0.5f - ((float)(y - mid) / (float)(field_h - mid)) * 0.5f;
+}
+
+/* ─── HSL color picker ─────────────────────────────────────────────────── */
+
+int cat_color_picker_ctx(ap_color initial, ap_color *result,
+                         cat_color_picker_context *context) {
     if (!result) return CAT_ERROR;
     *result = initial;
 
     ap_theme *theme = cat_get_theme();
+    SDL_Renderer *renderer = cat_get_renderer();
     int screen_w = cat_get_screen_width();
     int screen_h = cat_get_screen_height();
+    int pad = CAT_S(8);
 
-    int cell_size = CAT_S(48);
-    int cell_gap  = CAT_S(8);
-    int grid_size = 5;
-    int grid_w = grid_size * (cell_size + cell_gap) - cell_gap;
-    int grid_x = (screen_w - grid_w) / 2;
-    int grid_y = (screen_h - grid_w) / 2;
+    TTF_Font *title_font = cat_get_font(CAT_FONT_MEDIUM);
+    int header_h = (title_font ? TTF_FontHeight(title_font) : CAT_S(16)) + pad * 3;
+    /* Bottom preview strip height when context is provided. */
+    int preview_strip_h = 0;
+    if (context && context->role_count > 0) {
+        TTF_Font *preview_font = cat_get_font(CAT_FONT_SMALL);
+        int preview_row_h = preview_font ? TTF_FontHeight(preview_font) + CAT_S(6) : CAT_S(20);
+        preview_strip_h = preview_row_h * 3 + CAT_S(8);
+    }
 
-    int cx = 0, cy = 0;
+    /* Color field dimensions — full width, room for header and preview */
+    int field_x = 0;
+    int field_y = header_h;
+    int field_w = screen_w;
+    int field_h = screen_h - field_y - preview_strip_h;
 
-    /* Find initial selection */
-    for (int i = 0; i < 25; i++) {
-        if (cat__picker_colors[i].r == initial.r &&
-            cat__picker_colors[i].g == initial.g &&
-            cat__picker_colors[i].b == initial.b) {
-            cx = i % 5;
-            cy = i / 5;
-            break;
+    /* Convert initial color to HSL for cursor positioning.
+       X = hue (0..1), Y = lightness (top=white, mid=saturated, bottom=black). */
+    float init_h, init_s, init_l;
+    cat__rgb_to_hsl(initial.r, initial.g, initial.b, &init_h, &init_s, &init_l);
+
+    int cursor_x = (int)(init_h * (float)(field_w - 1));
+    int cursor_y;
+    if (init_l >= 0.5f)
+        cursor_y = (int)((1.0f - init_l) * 2.0f * (float)(field_h / 2));
+    else
+        cursor_y = field_h / 2 + (int)((0.5f - init_l) * 2.0f * (float)(field_h / 2));
+    if (cursor_x < 0) cursor_x = 0;
+    if (cursor_x >= field_w) cursor_x = field_w - 1;
+    if (cursor_y < 0) cursor_y = 0;
+    if (cursor_y >= field_h) cursor_y = field_h - 1;
+
+    /* Build HSL field texture (X=hue, Y=lightness, full saturation) */
+    SDL_Texture *field_tex = SDL_CreateTexture(renderer,
+        SDL_PIXELFORMAT_RGB24, SDL_TEXTUREACCESS_STREAMING, field_w, field_h);
+    if (field_tex) {
+        void *pixels;
+        int pitch;
+        if (SDL_LockTexture(field_tex, NULL, &pixels, &pitch) == 0) {
+            for (int fy = 0; fy < field_h; fy++) {
+                uint8_t *row = (uint8_t *)pixels + fy * pitch;
+                float l = cat__field_y_to_lightness(fy, field_h);
+                for (int fx = 0; fx < field_w; fx++) {
+                    float h = (float)fx / (float)(field_w - 1);
+                    uint8_t pr, pg, pb;
+                    cat__hsl_to_rgb(h, 1.0f, l, &pr, &pg, &pb);
+                    row[fx * 3 + 0] = pr;
+                    row[fx * 3 + 1] = pg;
+                    row[fx * 3 + 2] = pb;
+                }
+            }
+            SDL_UnlockTexture(field_tex);
         }
     }
+
+    /* Current picked color (live preview) */
+    uint8_t pick_r = initial.r, pick_g = initial.g, pick_b = initial.b;
+
+    int cursor_speed = CAT_S(4);
+    if (cursor_speed < 2) cursor_speed = 2;
 
     bool running = true;
     while (running) {
+        /* Drain the event queue — only A/B need event handling. */
         cat_input_event ev;
         while (cat_poll_input(&ev)) {
             if (!ev.pressed) continue;
-            switch (ev.button) {
-                case CAT_BTN_UP:    cy = (cy - 1 + grid_size) % grid_size; break;
-                case CAT_BTN_DOWN:  cy = (cy + 1) % grid_size; break;
-                case CAT_BTN_LEFT:  cx = (cx - 1 + grid_size) % grid_size; break;
-                case CAT_BTN_RIGHT: cx = (cx + 1) % grid_size; break;
-                case CAT_BTN_A:
-                    *result = cat__picker_colors[cy * 5 + cx];
-                    return CAT_OK;
-                case CAT_BTN_B:
-                    return CAT_CANCELLED;
-                default: break;
+            if (ev.button == CAT_BTN_A) {
+                result->r = pick_r;
+                result->g = pick_g;
+                result->b = pick_b;
+                result->a = 255;
+                if (field_tex) SDL_DestroyTexture(field_tex);
+                return CAT_OK;
+            }
+            if (ev.button == CAT_BTN_B) {
+                if (field_tex) SDL_DestroyTexture(field_tex);
+                return CAT_CANCELLED;
             }
         }
 
+        /* Read held state directly from Catastrophe's internal tracking.
+           This gives reliable diagonal movement and L1/R1 fast mode. */
+        bool fast_mode = cat__g.buttons_held[CAT_BTN_L1] ||
+                         cat__g.buttons_held[CAT_BTN_R1];
+        int speed = fast_mode ? cursor_speed * 4 : cursor_speed;
+        int dx = 0, dy = 0;
+        if (cat__g.buttons_held[CAT_BTN_LEFT])  dx -= speed;
+        if (cat__g.buttons_held[CAT_BTN_RIGHT]) dx += speed;
+        if (cat__g.buttons_held[CAT_BTN_UP])    dy -= speed;
+        if (cat__g.buttons_held[CAT_BTN_DOWN])  dy += speed;
+
+        if (dx != 0 || dy != 0) {
+            cursor_x += dx;
+            cursor_y += dy;
+            if (cursor_x < 0) cursor_x = 0;
+            if (cursor_x >= field_w) cursor_x = field_w - 1;
+            if (cursor_y < 0) cursor_y = 0;
+            if (cursor_y >= field_h) cursor_y = field_h - 1;
+
+            float h = (float)cursor_x / (float)(field_w - 1);
+            float l = cat__field_y_to_lightness(cursor_y, field_h);
+            cat__hsl_to_rgb(h, 1.0f, l, &pick_r, &pick_g, &pick_b);
+        }
+
+        /* Draw */
         cat_draw_background();
 
-        /* Title */
-        TTF_Font *font = cat_get_font(CAT_FONT_SMALL);
-        if (font) {
-            const char *title = "Select Color";
-            int tw = cat_measure_text(font, title);
-            cat_draw_text(font, title, (screen_w - tw) / 2, grid_y - CAT_S(50), theme->text);
+        /* Header: title on left, hints on right */
+        if (title_font) {
+            const char *title = "Pick a Color";
+            if (context && context->active_role >= 0 &&
+                context->active_role < context->role_count &&
+                context->roles[context->active_role].label)
+                title = context->roles[context->active_role].label;
+            cat_draw_text(title_font, title, pad * 2, pad, theme->text);
+
+            const char *hints = "L1:Fast  B:Cancel  A:Pick";
+            int hints_w = cat_measure_text(title_font, hints);
+            cat_draw_text(title_font, hints, screen_w - hints_w - pad * 2, pad, theme->hint);
         }
 
-        /* Grid */
-        for (int row = 0; row < grid_size; row++) {
-            for (int col = 0; col < grid_size; col++) {
-                int i = row * 5 + col;
-                int x = grid_x + col * (cell_size + cell_gap);
-                int y = grid_y + row * (cell_size + cell_gap);
+        /* Separator */
+        int sep_y = header_h - pad;
+        cat_draw_rect(pad * 2, sep_y, screen_w - pad * 4, 1, cat_hex_to_color("#ffffff20"));
 
-                cat_draw_rounded_rect(x, y, cell_size, cell_size, CAT_S(6), cat__picker_colors[i]);
+        /* Bottom contextual preview — horizontal mock UI showing theme
+           colors in their actual roles. The active color updates live.
+           Footer hints already cover accent, button text, button bg. */
+        if (context && context->role_count > 0 && preview_strip_h > 0) {
+            ap_color live_color = { pick_r, pick_g, pick_b, 255 };
 
-                /* Selection highlight */
-                if (row == cy && col == cx) {
-                    ap_color border = theme->highlight;
-                    int bw = CAT_S(3);
-                    /* Draw border by drawing a larger rect behind */
-                    cat_draw_rounded_rect(x - bw, y - bw,
-                        cell_size + bw * 2, cell_size + bw * 2,
-                        CAT_S(8), border);
-                    cat_draw_rounded_rect(x, y, cell_size, cell_size, CAT_S(6), cat__picker_colors[i]);
-                }
+            /* Resolve role colors, substituting live pick for active. */
+            ap_color resolved[8];
+            for (int i = 0; i < context->role_count && i < 8; i++)
+                resolved[i] = (i == context->active_role) ? live_color
+                                                           : context->roles[i].color;
+
+            ap_color col_accent = context->role_count > 0 ? resolved[0] : theme->accent;
+            ap_color col_bg     = context->role_count > 1 ? resolved[1] : theme->background;
+            ap_color col_text   = context->role_count > 2 ? resolved[2] : theme->text;
+            ap_color col_sel    = context->role_count > 3 ? resolved[3] : theme->highlight;
+            ap_color col_hint   = context->role_count > 4 ? resolved[4] : theme->hint;
+            ap_color col_btn_tx = context->role_count > 5 ? resolved[5] : theme->button_label;
+            ap_color col_btn_bg = context->role_count > 6 ? resolved[6] : theme->button_glyph_bg;
+
+            TTF_Font *preview_font = cat_get_font(CAT_FONT_SMALL);
+            int preview_y = field_y + field_h;
+            int row_h = preview_font ? TTF_FontHeight(preview_font) + CAT_S(4) : CAT_S(16);
+            int inset = CAT_S(8);
+            int half_w = screen_w / 2;
+
+            /* Background fill */
+            cat_draw_rect(0, preview_y, screen_w, preview_strip_h, col_bg);
+
+            /* Separator */
+            cat_draw_rect(0, preview_y, screen_w, 1, cat_hex_to_color("#ffffff30"));
+
+            int row_y = preview_y + CAT_S(3);
+
+            /* Two-column layout: left shows text roles, right shows action roles */
+
+            /* Left col row 1: "Text" in text color */
+            if (preview_font)
+                cat_draw_text(preview_font, "Text", inset, row_y, col_text);
+            /* Right col row 1: accent bar */
+            cat_draw_rect(half_w, row_y, half_w - inset, row_h - CAT_S(2), col_accent);
+            if (preview_font)
+                cat_draw_text(preview_font, "Accent", half_w + CAT_S(4), row_y, col_bg);
+            row_y += row_h;
+
+            /* Left col row 2: "Selection" on highlight */
+            cat_draw_pill(inset / 2, row_y, half_w - inset, row_h - CAT_S(2), col_sel);
+            if (preview_font)
+                cat_draw_text(preview_font, "Selection", inset, row_y + CAT_S(1), col_text);
+            /* Right col row 2: button pill */
+            cat_draw_pill(half_w, row_y, half_w - inset, row_h - CAT_S(2), col_btn_bg);
+            if (preview_font)
+                cat_draw_text(preview_font, "Button", half_w + CAT_S(4), row_y + CAT_S(1), col_btn_tx);
+            row_y += row_h;
+
+            /* Left col row 3: "Secondary" in hint color */
+            if (preview_font)
+                cat_draw_text(preview_font, "Secondary", inset, row_y, col_hint);
+
+            /* Right col row 3: live hex value */
+            if (preview_font) {
+                char hex[16];
+                snprintf(hex, sizeof(hex), "#%02X%02X%02X", pick_r, pick_g, pick_b);
+                ap_color hex_color = { pick_r, pick_g, pick_b, 255 };
+                int hex_text_w = cat_measure_text(preview_font, hex);
+                cat_draw_text(preview_font, hex, screen_w - hex_text_w - inset, row_y, hex_color);
             }
         }
 
-        /* Preview of selected color */
-        ap_color sel = cat__picker_colors[cy * 5 + cx];
-        int preview_y = grid_y + grid_w + CAT_S(20);
-        int preview_w = CAT_S(100);
-        int preview_h = CAT_S(40);
-        cat_draw_pill((screen_w - preview_w) / 2, preview_y, preview_w, preview_h, sel);
+        /* Color field */
+        if (field_tex) {
+            SDL_Rect dst = { field_x, field_y, field_w, field_h };
+            SDL_RenderCopy(renderer, field_tex, NULL, &dst);
+        }
 
-        /* Footer */
-        cat_footer_item picker_footer[] = {
-            { .button = CAT_BTN_B, .label = "BACK", .is_confirm = false },
-            { .button = CAT_BTN_A, .label = "SELECT", .is_confirm = true },
-        };
-        cat_draw_footer(picker_footer, 2);
+        /* Cursor crosshair */
+        int cross_x = field_x + cursor_x;
+        int cross_y = field_y + cursor_y;
+        {
+            int arm = CAT_S(20);
+            int thick = CAT_S(3);
+            if (thick < 2) thick = 2;
+            ap_color white = { 255, 255, 255, 255 };
+            ap_color black = { 0, 0, 0, 200 };
+
+            /* Black outline */
+            cat_draw_rect(cross_x - arm - 1, cross_y - thick / 2 - 1,
+                          arm * 2 + thick + 2, thick + 2, black);
+            cat_draw_rect(cross_x - thick / 2 - 1, cross_y - arm - 1,
+                          thick + 2, arm * 2 + thick + 2, black);
+            /* White cross */
+            cat_draw_rect(cross_x - arm, cross_y - thick / 2, arm * 2 + thick, thick, white);
+            cat_draw_rect(cross_x - thick / 2, cross_y - arm, thick, arm * 2 + thick, white);
+        }
+
+        /* Floating preview swatch — follows cursor with black border to
+           isolate from surrounding colors (mitigates simultaneous contrast). */
+        {
+            ap_color sel = { pick_r, pick_g, pick_b, 255 };
+            ap_color border_color = { 0, 0, 0, 255 };
+            int swatch_size = CAT_S(32);
+            int border = CAT_S(3);
+            int offset = CAT_S(24);
+
+            /* Position: offset to the bottom-right of cursor. If that would
+               go off-screen, flip to the other side. */
+            int swatch_x = cross_x + offset;
+            int swatch_y = cross_y + offset;
+            if (swatch_x + swatch_size + border > field_x + field_w)
+                swatch_x = cross_x - offset - swatch_size;
+            if (swatch_y + swatch_size + border > field_y + field_h)
+                swatch_y = cross_y - offset - swatch_size;
+
+            /* Black border */
+            cat_draw_rect(swatch_x - border, swatch_y - border,
+                          swatch_size + border * 2, swatch_size + border * 2,
+                          border_color);
+            /* Color fill */
+            cat_draw_rect(swatch_x, swatch_y, swatch_size, swatch_size, sel);
+        }
+
+        /* Inline hints in header instead of footer (avoids blocking preview) */
 
         cat_present();
-
     }
 
+    if (field_tex) SDL_DestroyTexture(field_tex);
     return CAT_CANCELLED;
+}
+
+int cat_color_picker(ap_color initial, ap_color *result) {
+    return cat_color_picker_ctx(initial, result, NULL);
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
