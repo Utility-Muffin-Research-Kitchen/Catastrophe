@@ -914,6 +914,17 @@ void           cat_text_scroll_init(cat_text_scroll *s);
 void           cat_text_scroll_update(cat_text_scroll *s, int text_w, int visible_w, uint32_t dt_ms);
 void           cat_text_scroll_reset(cat_text_scroll *s);
 
+/* Looping marquee: draws text at (x,y) clipped to visible_w. If it fits, draws
+   normally and returns false. If it overflows, after a brief initial pause it
+   scrolls left continuously and loops back to the start (a second copy follows
+   a gap for a seamless wrap). Caller persists `m` across frames, passes elapsed
+   dt_ms, and resets m->elapsed_ms to 0 when the text changes. Returns true
+   while scrolling so the caller can request another frame. */
+typedef struct { uint32_t elapsed_ms; } cat_marquee;
+bool           cat_draw_text_marquee(TTF_Font *font, const char *text, int x, int y,
+                                     ap_color color, int visible_w,
+                                     cat_marquee *m, uint32_t dt_ms);
+
 /* ═══════════════════════════════════════════════════════════════════════════
  * Public API — Texture Cache
  * ═══════════════════════════════════════════════════════════════════════════ */
@@ -3804,6 +3815,39 @@ void cat_text_scroll_update(cat_text_scroll *s, int text_w, int visible_w, uint3
 
 void cat_text_scroll_reset(cat_text_scroll *s) {
     cat_text_scroll_init(s);
+}
+
+bool cat_draw_text_marquee(TTF_Font *font, const char *text, int x, int y,
+                           ap_color color, int visible_w,
+                           cat_marquee *m, uint32_t dt_ms) {
+    if (!font || !text) return false;
+
+    int text_w = cat_measure_text(font, text);
+    if (visible_w <= 0 || text_w <= visible_w) {
+        if (m) m->elapsed_ms = 0;
+        cat_draw_text(font, text, x, y, color);
+        return false;
+    }
+
+    if (m) m->elapsed_ms += dt_ms;
+    uint32_t elapsed = m ? m->elapsed_ms : 0;
+
+    int gap = visible_w / 3;
+    if (gap < CAT_S(28)) gap = CAT_S(28);
+    int period = text_w + gap;                 /* one full loop in pixels */
+
+    const uint32_t pause_ms    = 900;          /* hold at the start first */
+    const int      speed_px_s  = CAT_S(70);
+    uint32_t scroll_ms = (elapsed > pause_ms) ? (elapsed - pause_ms) : 0;
+    int off = (int)(((uint64_t)scroll_ms * (uint64_t)speed_px_s) / 1000u);
+    if (period > 0) off %= period;
+
+    SDL_Rect clip = { x, y, visible_w, TTF_FontHeight(font) };
+    SDL_RenderSetClipRect(cat__g.renderer, &clip);
+    cat_draw_text(font, text, x - off, y, color);
+    cat_draw_text(font, text, x - off + period, y, color);  /* wrap-around copy */
+    SDL_RenderSetClipRect(cat__g.renderer, NULL);
+    return true;
 }
 
 /* ─── Texture Cache ──────────────────────────────────────────────────────── */
