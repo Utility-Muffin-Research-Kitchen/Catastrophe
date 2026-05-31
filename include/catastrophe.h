@@ -584,6 +584,10 @@ typedef struct {
     bool         use_24h;       /* 24-hour clock if true; 12-hour if false */
     bool         show_battery;  /* Show battery icon from device or desktop preview state */
     bool         show_wifi;     /* Show wifi icon from device or desktop preview state */
+    bool         no_ampm;       /* For 12-hour mode: skip AM/PM suffix */
+    bool         no_pill;       /* Draw icons/text inline without pill background */
+    bool         use_y;         /* If true, use y_position instead of default padding */
+    int          y_position;    /* Custom y position (requires use_y = true) */
 } cat_status_bar_opts;
 
 /* Screen fade overlay — per-frame draw state for fade-in / fade-out transitions */
@@ -4672,6 +4676,7 @@ typedef struct {
     bool battery_visible;
     bool clock_visible;
     bool clock_24h;
+    bool clock_no_ampm;
     int  wifi_strength;
     int  visible_icon_count;
     bool single_icon_sprite_mode;
@@ -4685,6 +4690,7 @@ static inline cat__status_bar_layout cat__resolve_status_bar_layout(const cat_st
     layout.use_sprite_layout = (cat__g.status_assets != NULL);
     layout.battery_visible   = opts->show_battery;
     layout.clock_24h         = opts->use_24h;
+    layout.clock_no_ampm     = opts->no_ampm;
 
     if (opts->show_wifi) {
         layout.wifi_strength = cat__get_wifi_strength();
@@ -4738,6 +4744,8 @@ static int cat__measure_status_bar_width(const cat_status_bar_opts *opts, TTF_Fo
         struct tm *t = localtime(&now);
         if (layout->clock_24h)
             strftime(clock_text, sizeof(clock_text), "%H:%M", t);
+        else if (layout->clock_no_ampm)
+            strftime(clock_text, sizeof(clock_text), "%I:%M", t);
         else
             strftime(clock_text, sizeof(clock_text), "%I:%M %p", t);
         total_w += cat_measure_text(font, clock_text) + margin;
@@ -4829,10 +4837,11 @@ void cat_draw_status_bar(cat_status_bar_opts *opts) {
     if (pill_w <= 0) return;
 
     int pill_h = CAT_DS(CAT__PILL_SIZE);
-    int pill_y = padding;
+    int pill_y = opts->use_y ? opts->y_position : padding;
     int pill_x = cat__g.screen_w - padding - pill_w;
 
-    cat_draw_pill(pill_x, pill_y, pill_w, pill_h, cat__g.theme.accent);
+    if (!opts->no_pill)
+        cat_draw_pill(pill_x, pill_y, pill_w, pill_h, cat__g.theme.accent);
 
     if (layout.single_icon_sprite_mode) {
         if (layout.battery_visible) {
@@ -4897,6 +4906,8 @@ void cat_draw_status_bar(cat_status_bar_opts *opts) {
             struct tm *t = localtime(&now);
             if (layout.clock_24h)
                 strftime(clock_text, sizeof(clock_text), "%H:%M", t);
+            else if (layout.clock_no_ampm)
+                strftime(clock_text, sizeof(clock_text), "%I:%M", t);
             else
                 strftime(clock_text, sizeof(clock_text), "%I:%M %p", t);
             int th = TTF_FontHeight(font);
