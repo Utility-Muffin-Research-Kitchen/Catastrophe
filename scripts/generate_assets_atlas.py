@@ -449,9 +449,10 @@ def write_png_rgba8(width: int, height: int, raw_scanlines: bytes) -> bytes:
 
 def draw_battery(c: Canvas, x: float, y: float, color: tuple[int, int, int, int]) -> None:
     # Body outline (1px border via erased interior) + a Tabler-style terminal nub on the right.
-    # Interior right edge sits at x+15 so the runtime fill (x+3, width 12) lands flush inside it.
-    c.rounded_rect(x + 0.2, y + 0.4, 15.8, 9.2, 1.5, color)
-    c.erase_rect(x + 1.2, y + 1.4, 13.8, 7.2)
+    # Cavity is x1..15; the runtime blits the fill at x+2 (width 12 -> x2..14), centering it
+    # with a 1px margin each side (see cat__draw_status_bar_battery_sprite).
+    c.rounded_rect(x + 0.0, y + 0.4, 16.0, 9.2, 1.5, color)
+    c.erase_rect(x + 1.0, y + 1.4, 14.0, 7.2)
     c.rect(x + 16.0, y + 3.4, 1.0, 3.2, color)
 
 

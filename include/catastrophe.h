@@ -4769,8 +4769,10 @@ static void cat__draw_status_bar_battery_sprite(int x, int y, TTF_Font *font) {
     if (charging) {
         cat__blit_status_icon(47, 51, CAT__BATTERY_W, CAT__BATTERY_H,
                              x, y, iw, ih, cat__g.theme.hint);
+        /* Fill/charge bar sits at x+2 (not +3): the battery's right-side terminal nub
+           shifts the interior left by ~1px, so this keeps the bar centered in the cavity. */
         cat__blit_status_icon(81, 41, 12, 6,
-                             x + 3 * s, y + 2 * s,
+                             x + 2 * s, y + 2 * s,
                              12 * s, 6 * s, cat__g.theme.hint);
     } else {
         bool low = (bat >= 0 && bat <= 10);
@@ -4785,7 +4787,7 @@ static void cat__draw_status_bar_battery_sprite(int x, int y, TTF_Font *font) {
             int clip_off = fill_full_w - fill_w;
             if (fill_w > 0) {
                 SDL_Rect fsrc = { fill_src_x * s + clip_off, fill_src_y * s, fill_w, fill_h_px };
-                SDL_Rect fdst = { x + 3 * s + clip_off, y + 2 * s, fill_w, fill_h_px };
+                SDL_Rect fdst = { x + 2 * s + clip_off, y + 2 * s, fill_w, fill_h_px };
                 SDL_SetTextureColorMod(cat__g.status_assets, cat__g.theme.hint.r, cat__g.theme.hint.g, cat__g.theme.hint.b);
                 SDL_SetTextureAlphaMod(cat__g.status_assets, cat__g.theme.hint.a);
                 SDL_RenderCopy(cat__g.renderer, cat__g.status_assets, &fsrc, &fdst);
