@@ -832,6 +832,7 @@ void           cat_set_theme_color(const char *hex);
 
 TTF_Font      *cat_get_font(cat_font_tier tier);
 int            cat_get_font_bump(void);
+int            cat_set_font_bump(int bump);
 
 /* ═══════════════════════════════════════════════════════════════════════════
  * Public API — Input
@@ -2166,6 +2167,13 @@ TTF_Font *cat_get_font(cat_font_tier tier) {
 
 int cat_get_font_bump(void) {
     return cat__g.font_bump;
+}
+
+int cat_set_font_bump(int bump) {
+    if (bump < 0) bump = 0;
+    if (bump > CAT_FONT_BUMP_MAX) bump = CAT_FONT_BUMP_MAX;
+    cat__g.font_bump = bump;
+    return cat__load_fonts(cat__g.theme.font_path[0] ? cat__g.theme.font_path : NULL);
 }
 
 /* ─── Input System ───────────────────────────────────────────────────────── */
