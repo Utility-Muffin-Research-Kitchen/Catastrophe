@@ -829,6 +829,9 @@ const cat_stylesheet *cat_get_stylesheet(void);
 int            cat_reload_background(const char *bg_path);
 ap_color       cat_hex_to_color(const char *hex);
 void           cat_set_theme_color(const char *hex);
+/* Override the tab-bar text colors on the active stylesheet (inactive +
+   selected). Lets the host map them onto its own palette roles. */
+void           cat_set_tab_text_colors(cat_color inactive, cat_color selected);
 
 /* ═══════════════════════════════════════════════════════════════════════════
  * Public API — Fonts
@@ -1328,6 +1331,11 @@ void cat_set_theme_color(const char *hex) {
     if (hex) {
         cat__g.theme.accent = cat_hex_to_color(hex);
     }
+}
+
+void cat_set_tab_text_colors(cat_color inactive, cat_color selected) {
+    cat__g.stylesheet.ui.tab_color = inactive;
+    cat__g.stylesheet.ui.tab_selected_color = selected;
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
