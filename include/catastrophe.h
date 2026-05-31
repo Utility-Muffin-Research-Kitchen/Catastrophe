@@ -653,6 +653,10 @@ typedef struct {
     bool        disable_background;  /* Set true to skip bg.png rendering */
     cat_cpu_speed cpu_speed;       /* Set CPU at init; 0 = CAT_CPU_SPEED_DEFAULT (no-op) */
     bool        disable_font_bump;   /* Set true to disable automatic font bumping */
+    bool        start_hidden;        /* Create the window hidden (SDL_WINDOW_HIDDEN);
+                                        caller shows it later with cat_show_window().
+                                        Lets a daemon warm up a window behind another
+                                        fullscreen app without mapping a surface. */
 } cat_config;
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -804,6 +808,8 @@ SDL_Renderer  *cat_get_renderer(void);
 SDL_Window    *cat_get_window(void);
 int            cat_get_screen_width(void);
 int            cat_get_screen_height(void);
+/* Show the window and raise it to the foreground (SDL_ShowWindow +
+ * SDL_RaiseWindow). Pairs with cat_config.start_hidden for warm-standby use. */
 void           cat_show_window(void);
 void           cat_hide_window(void);
 /* Raise the window and activate the application. Required on macOS when the
@@ -5238,7 +5244,13 @@ void cat_set_power_handler(bool enabled) {
 
 SDL_Renderer *cat_get_renderer(void)   { return cat__g.renderer; }
 SDL_Window   *cat_get_window(void)     { return cat__g.window; }
-void cat_show_window(void) { if (cat__g.window) SDL_ShowWindow(cat__g.window); }
+void cat_show_window(void) {
+    if (!cat__g.window) return;
+    SDL_ShowWindow(cat__g.window);
+    /* Raise above any other surface (e.g. a paused RetroArch) so the freshly
+       shown window takes the foreground. Cheap remap, not a re-init. */
+    SDL_RaiseWindow(cat__g.window);
+}
 void cat_hide_window(void) { if (cat__g.window) SDL_HideWindow(cat__g.window); }
 int           cat_get_screen_width(void)  { return cat__g.screen_w; }
 int           cat_get_screen_height(void) { return cat__g.screen_h; }
@@ -5461,8 +5473,11 @@ int cat_init(cat_config *cfg) {
         cat__g.font_bump = cat__compute_font_bump();
     cat_log("Font bump: %d", cat__g.font_bump);
 
-    /* Create window */
-    uint32_t win_flags = SDL_WINDOW_SHOWN;
+    /* Create window. Start hidden when requested so a daemon can warm up the
+       renderer/fonts behind another fullscreen app (e.g. RetroArch) without
+       mapping a surface; the caller maps it later via cat_show_window(). */
+    uint32_t win_flags = (cfg && cfg->start_hidden) ? SDL_WINDOW_HIDDEN
+                                                     : SDL_WINDOW_SHOWN;
     if (!dev_mode) {
         win_flags |= SDL_WINDOW_FULLSCREEN_DESKTOP;
     }
