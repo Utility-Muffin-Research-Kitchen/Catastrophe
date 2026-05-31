@@ -878,6 +878,7 @@ void           cat_draw_rounded_rect(int x, int y, int w, int h, int r, ap_color
 void           cat_draw_pill(int x, int y, int w, int h, ap_color c);
 void           cat_draw_rect(int x, int y, int w, int h, ap_color c);
 void           cat_draw_circle(int cx, int cy, int r, ap_color c);
+void           cat_draw_star(int cx, int cy, int outer_r, ap_color c); /* filled 5-point star centered at (cx,cy) */
 int            cat_draw_text(TTF_Font *font, const char *text, int x, int y, ap_color color);          /* returns rendered width in pixels */
 int            cat_draw_text_clipped(TTF_Font *font, const char *text, int x, int y, ap_color color, int max_w); /* returns rendered width */
 int            cat_draw_text_ellipsized(TTF_Font *font, const char *text, int x, int y, ap_color color, int max_w); /* truncate with "..." if too wide */
@@ -3305,6 +3306,42 @@ void cat_draw_circle(int cx, int cy, int r, ap_color c) {
         int dx = (int)(sqrtf((float)(r * r - dy * dy)) + 0.5f);
         SDL_RenderDrawLine(cat__g.renderer, cx - dx, cy + dy, cx + dx, cy + dy);
     }
+}
+
+void cat_draw_star(int cx, int cy, int outer_r, ap_color c) {
+    if (outer_r < 1) return;
+
+    /* Filled 5-point star as a triangle fan: a center vertex plus 10 perimeter
+       vertices alternating between the outer radius (points) and an inner
+       radius (valleys), starting at the top. Drawn untextured so the per-vertex
+       color fills it — no font glyph required. */
+    enum { CAT__STAR_POINTS = 5, CAT__STAR_PERIM = CAT__STAR_POINTS * 2 };
+    const float inner_r = (float)outer_r * 0.42f;
+    const float start_angle = -1.57079633f;          /* -90deg: first point up */
+    const float step_angle = 0.62831853f;             /* 36deg between vertices */
+    SDL_Color col = (SDL_Color){ c.r, c.g, c.b, c.a };
+
+    SDL_Vertex verts[1 + CAT__STAR_PERIM];
+    verts[0].position  = (SDL_FPoint){ (float)cx, (float)cy };
+    verts[0].tex_coord = (SDL_FPoint){ 0.0f, 0.0f };
+    verts[0].color     = col;
+    for (int i = 0; i < CAT__STAR_PERIM; i++) {
+        float radius = (i % 2 == 0) ? (float)outer_r : inner_r;
+        float angle  = start_angle + (float)i * step_angle;
+        verts[1 + i].position  = (SDL_FPoint){ (float)cx + radius * cosf(angle),
+                                               (float)cy + radius * sinf(angle) };
+        verts[1 + i].tex_coord = (SDL_FPoint){ 0.0f, 0.0f };
+        verts[1 + i].color     = col;
+    }
+
+    int indices[3 * CAT__STAR_PERIM];
+    for (int i = 0; i < CAT__STAR_PERIM; i++) {
+        indices[i * 3 + 0] = 0;
+        indices[i * 3 + 1] = 1 + i;
+        indices[i * 3 + 2] = 1 + ((i + 1) % CAT__STAR_PERIM);
+    }
+    SDL_RenderGeometry(cat__g.renderer, NULL, verts, 1 + CAT__STAR_PERIM,
+                       indices, 3 * CAT__STAR_PERIM);
 }
 
 int cat_draw_text(TTF_Font *font, const char *text, int x, int y, ap_color color) {
