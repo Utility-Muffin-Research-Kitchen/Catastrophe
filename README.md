@@ -149,7 +149,7 @@ All pixel values are specified at a **1024px reference width** and automatically
 
 ### Theming
 
-Catastrophe uses [Allium](https://github.com/goweiwen/Allium)'s `stylesheet.json` format for themes. The runtime discovers themes from `$CAT_THEMES_DIR`, `res/themes/`, the bundled `themes/Allium-Themes/Themes/` submodule, and `/mnt/SDCARD/Themes/` on device. The shipped default theme (`res/themes/Catastrophe/`) reproduces the Apostrophe colors pixel-for-pixel. You can override the accent color at init via `cat_config.primary_color_hex`.
+Catastrophe uses [Allium](https://github.com/goweiwen/Allium)'s `stylesheet.json` format for themes. The runtime discovers themes from `$CAT_THEMES_DIR`, `res/themes/`, the bundled `themes/Allium-Themes/Themes/` submodule, and the platform theme path derived from `SDCARD_PATH` or `UMRK_LAUNCHER_PATH`. The shipped default theme (`res/themes/Catastrophe/`) reproduces the Apostrophe colors pixel-for-pixel. You can override the accent color at init via `cat_config.primary_color_hex`.
 
 ### Input
 

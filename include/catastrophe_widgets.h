@@ -345,9 +345,9 @@ void cat_show_help_overlay(const char *text);
  * An optional "New Folder" action (X button) opens cat_keyboard() inline in
  * directory-capable modes.
  *
- * On device builds the browser is sandboxed to SDCARD_PATH (env) or
- * /mnt/SDCARD. On desktop it defaults to $HOME (or $USERPROFILE on
- * Windows, CWD as final fallback).
+ * On device builds the browser is sandboxed to SDCARD_PATH (env contract)
+ * or the platform default SD card root. On desktop it defaults to $HOME
+ * (or $USERPROFILE on Windows, CWD as final fallback).
  * ═══════════════════════════════════════════════════════════════════════════ */
 
 typedef enum {
@@ -3922,8 +3922,8 @@ static void cat__file_picker_format_title(char *out, size_t out_size,
 /* Resolve the default root path per platform */
 static const char *cat__file_picker_resolve_root(void) {
 #if CAT_PLATFORM_IS_DEVICE
-    const char *sdcard = getenv("SDCARD_PATH");
-    return (sdcard && sdcard[0]) ? sdcard : "/mnt/SDCARD";
+    const char *sdcard = cat__env_nonempty("SDCARD_PATH");
+    return sdcard ? sdcard : cat__default_sdcard_path();
 #elif defined(_WIN32)
     const char *home = getenv("USERPROFILE");
     return (home && home[0]) ? home : ".";

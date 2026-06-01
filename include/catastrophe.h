@@ -117,6 +117,15 @@
 #define CAT_ERROR    (-1)
 #define CAT_CANCELLED (-2)
 
+#define CAT__MLP1_DEFAULT_SDCARD_PATH "/mnt/sdcard"
+#define CAT__RETRO_DEFAULT_SDCARD_PATH "/mnt/SDCARD"
+
+#if defined(__GNUC__) || defined(__clang__)
+#define CAT__MAYBE_UNUSED __attribute__((unused))
+#else
+#define CAT__MAYBE_UNUSED
+#endif
+
 /* Design reference width for scaling calculations */
 #define CAT_REFERENCE_WIDTH 1024
 
@@ -1128,18 +1137,91 @@ static bool cat__env_parse_int(const char *name, int *out) {
 }
 #endif
 
+static const char *cat__env_nonempty(const char *name) {
+    const char *value = getenv(name);
+    return (value && value[0]) ? value : NULL;
+}
+
+static const char *cat__default_sdcard_path(void) {
+#if defined(PLATFORM_MLP1)
+    return CAT__MLP1_DEFAULT_SDCARD_PATH;
+#elif CAT_PLATFORM_IS_DEVICE
+    return CAT__RETRO_DEFAULT_SDCARD_PATH;
+#else
+    return NULL;
+#endif
+}
+
+static const char *cat__sdcard_path(void) {
+    const char *sdcard = cat__env_nonempty("SDCARD_PATH");
+    return sdcard ? sdcard : cat__default_sdcard_path();
+}
+
+static const char *cat__system_path(char *buf, size_t buf_size) CAT__MAYBE_UNUSED;
+static const char *cat__system_path(char *buf, size_t buf_size) {
+    const char *path = cat__env_nonempty("SYSTEM_PATH");
+    if (path) return path;
+
+    const char *sdcard = cat__sdcard_path();
+    if (!sdcard || !buf || buf_size == 0) return NULL;
+#if defined(PLATFORM_MLP1)
+    snprintf(buf, buf_size, "%s/UMRK/%s", sdcard, CAT_PLATFORM_NAME);
+#elif CAT_PLATFORM_IS_DEVICE
+    snprintf(buf, buf_size, "%s/.system/%s", sdcard, CAT_PLATFORM_NAME);
+#else
+    snprintf(buf, buf_size, "%s/UMRK/%s", sdcard, CAT_PLATFORM_NAME);
+#endif
+    return buf;
+}
+
+static const char *cat__launcher_path(char *buf, size_t buf_size) CAT__MAYBE_UNUSED;
+static const char *cat__launcher_path(char *buf, size_t buf_size) {
+    const char *path = cat__env_nonempty("UMRK_LAUNCHER_PATH");
+    if (path) return path;
+
+    const char *sdcard = cat__sdcard_path();
+    if (!sdcard || !buf || buf_size == 0) return NULL;
+#if defined(PLATFORM_MLP1)
+    snprintf(buf, buf_size, "%s/umrk-launcher", sdcard);
+#else
+    const char *system_path = cat__system_path(buf, buf_size);
+    return system_path;
+#endif
+    return buf;
+}
+
+static const char *cat__userdata_path(char *buf, size_t buf_size) CAT__MAYBE_UNUSED;
+static const char *cat__userdata_path(char *buf, size_t buf_size) {
+    const char *path = cat__env_nonempty("USERDATA_PATH");
+    if (path) return path;
+
+    const char *sdcard = cat__sdcard_path();
+    if (!sdcard || !buf || buf_size == 0) return NULL;
+#if defined(PLATFORM_MLP1)
+    snprintf(buf, buf_size, "%s/.userdata/%s", sdcard, CAT_PLATFORM_NAME);
+#elif CAT_PLATFORM_IS_DEVICE
+    snprintf(buf, buf_size, "%s/.allium/state", sdcard);
+#else
+    snprintf(buf, buf_size, ".catastrophe/state");
+#endif
+    return buf;
+}
+
 static const char *cat__status_assets_dir(char *buf, size_t buf_size) {
-    const char *dir = getenv("CAT_STATUS_ASSETS_DIR");
-    if (dir && dir[0]) return dir;
+    const char *dir = cat__env_nonempty("CAT_STATUS_ASSETS_DIR");
+    if (dir) return dir;
 
 #if CAT_PLATFORM_IS_DEVICE
-    const char *sdcard = getenv("SDCARD_PATH");
     #if defined(PLATFORM_MLP1)
-    if (!sdcard || !sdcard[0]) sdcard = "/mnt/sdcard";
-    snprintf(buf, buf_size, "%s/umrk-launcher/res/assets", sdcard);
+    char launcher_buf[PATH_MAX];
+    const char *launcher = cat__launcher_path(launcher_buf, sizeof(launcher_buf));
+    if (!launcher) return NULL;
+    snprintf(buf, buf_size, "%s/res/assets", launcher);
     #else
-    if (!sdcard || !sdcard[0]) sdcard = "/mnt/SDCARD";
-    snprintf(buf, buf_size, "%s/.system/res", sdcard);
+    char system_buf[PATH_MAX];
+    const char *system_path = cat__system_path(system_buf, sizeof(system_buf));
+    if (!system_path) return NULL;
+    snprintf(buf, buf_size, "%s/res", system_path);
     #endif
     return buf;
 #else
@@ -1168,19 +1250,7 @@ static const char *cat__font_search_paths[] = {
     "../res/font.ttf",
     "./res/fonts/Inter/Inter.ttf",
     "../res/fonts/Inter/Inter.ttf",
-#if defined(PLATFORM_TG5040) || defined(PLATFORM_TG5050)
-    "/mnt/SDCARD/.allium/fonts/Nunito.ttf",
-    "/mnt/SDCARD/Themes/Allium/fonts/Nunito.ttf",
-    "/mnt/SDCARD/.allium/fonts/font.ttf",
-#elif defined(PLATFORM_MY355)
-    "/mnt/SDCARD/.allium/fonts/Nunito.ttf",
-    "/mnt/SDCARD/Themes/Allium/fonts/Nunito.ttf",
-    "/mnt/SDCARD/.allium/fonts/font.ttf",
-#elif defined(PLATFORM_MLP1)
-    "/tmp/umrk-launcher/res/font.ttf",
-    "/tmp/umrk-launcher/res/fonts/SpaceGrotesk/SpaceGrotesk-Regular.ttf",
-    "/mnt/sdcard/umrk-launcher/res/font.ttf",
-    "/mnt/sdcard/umrk-launcher/res/fonts/SpaceGrotesk/SpaceGrotesk-Regular.ttf",
+#if defined(PLATFORM_MLP1)
     "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
 #elif defined(PLATFORM_MAC)
     "/System/Library/Fonts/Helvetica.ttc",
@@ -1667,17 +1737,27 @@ int cat_stylesheet_load_file(cat_stylesheet *s, const char *path) {
    1. $CAT_THEMES_DIR (set via getenv at init) — explicit override
    2. ./res/themes/                            — bundled defaults (Catastrophe, Catastrophe-Demo)
    3. ./themes/Allium-Themes/Themes/           — git submodule
-   4. /mnt/SDCARD/Themes/                      — Allium device path */
+   4. platform env-contract paths              — bundled/device themes */
 static int cat__theme_dirs(const char *out[], int max) {
     int n = 0;
     if (cat__g.themes_dir[0] && n < max) out[n++] = cat__g.themes_dir;
     if (n < max) out[n++] = "./res/themes";
     if (n < max) out[n++] = "./themes/Allium-Themes/Themes";
 #if defined(PLATFORM_TG5040) || defined(PLATFORM_TG5050) || defined(PLATFORM_MY355)
-    if (n < max) out[n++] = "/mnt/SDCARD/Themes";
+    static char allium_themes[PATH_MAX];
+    const char *sdcard = cat__sdcard_path();
+    if (sdcard && n < max) {
+        snprintf(allium_themes, sizeof(allium_themes), "%s/Themes", sdcard);
+        out[n++] = allium_themes;
+    }
 #elif defined(PLATFORM_MLP1)
-    if (n < max) out[n++] = "/tmp/umrk-launcher/res/themes";
-    if (n < max) out[n++] = "/mnt/sdcard/umrk-launcher/res/themes";
+    static char launcher_themes[PATH_MAX];
+    char launcher_buf[PATH_MAX];
+    const char *launcher = cat__launcher_path(launcher_buf, sizeof(launcher_buf));
+    if (launcher && n < max) {
+        snprintf(launcher_themes, sizeof(launcher_themes), "%s/res/themes", launcher);
+        out[n++] = launcher_themes;
+    }
 #endif
     return n;
 }
@@ -1950,16 +2030,19 @@ int cat_reload_fonts(const char *font_path) {
 
 static void cat__state_file_path(char *buf, size_t buf_size) {
 #if CAT_PLATFORM_IS_DEVICE
-    const char *base = getenv("ALLIUM_BASE_DIR");
+    const char *explicit_path = cat__env_nonempty("CAT_THEME_STATE_PATH");
+    if (explicit_path) {
+        snprintf(buf, buf_size, "%s", explicit_path);
+        return;
+    }
+    const char *base = cat__env_nonempty("ALLIUM_BASE_DIR");
     if (base && base[0])
         snprintf(buf, buf_size, "%s/state/theme", base);
-    #if defined(PLATFORM_MLP1)
-    else
-        snprintf(buf, buf_size, "/mnt/sdcard/.umrk/catastrophe/theme");
-    #else
-    else
-        snprintf(buf, buf_size, "/mnt/SDCARD/.allium/state/theme");
-    #endif
+    else {
+        char userdata_buf[PATH_MAX];
+        const char *userdata = cat__userdata_path(userdata_buf, sizeof(userdata_buf));
+        snprintf(buf, buf_size, "%s/theme", userdata ? userdata : ".catastrophe/state");
+    }
 #else
     snprintf(buf, buf_size, ".catastrophe/state/theme");
 #endif
@@ -2027,10 +2110,16 @@ int cat_reload_background(const char *bg_path) {
     const char *resolved = bg_path;
 
     if (!resolved || !resolved[0]) {
-    #if CAT_PLATFORM_IS_DEVICE
-        resolved = "/mnt/SDCARD/bg.png";
-    #else
         resolved = getenv("CAT_BACKGROUND_PATH");
+    #if CAT_PLATFORM_IS_DEVICE
+        if (!resolved || !resolved[0]) {
+            static char bg_buf[PATH_MAX];
+            const char *sdcard = cat__sdcard_path();
+            if (sdcard) {
+                snprintf(bg_buf, sizeof(bg_buf), "%s/bg.png", sdcard);
+                resolved = bg_buf;
+            }
+        }
     #endif
     }
 
@@ -2162,6 +2251,50 @@ static int cat__load_fonts(const char *user_font_path) {
             snprintf(rf_buf, sizeof(rf_buf), "%s%s", rf_prefixes[i], user_font_path);
             if (access(rf_buf, R_OK) == 0)
                 font_path = rf_buf;
+        }
+    }
+
+    /* 1d. Runtime contract paths for bundled/device fonts. */
+    if (!font_path) {
+        static char candidates[8][PATH_MAX];
+        int candidate_count = 0;
+        const char *fd = cat__env_nonempty("CAT_FONTS_DIR");
+        if (fd && candidate_count < 8) {
+            snprintf(candidates[candidate_count++], PATH_MAX, "%s/font.ttf", fd);
+        }
+        if (fd && candidate_count < 8) {
+            snprintf(candidates[candidate_count++], PATH_MAX, "%s/Nunito.ttf", fd);
+        }
+#if defined(PLATFORM_MLP1)
+        char launcher_buf[PATH_MAX];
+        const char *launcher = cat__launcher_path(launcher_buf, sizeof(launcher_buf));
+        if (launcher && candidate_count < 8) {
+            snprintf(candidates[candidate_count++], PATH_MAX, "%s/res/font.ttf", launcher);
+        }
+        if (launcher && candidate_count < 8) {
+            snprintf(candidates[candidate_count++], PATH_MAX,
+                     "%s/res/fonts/SpaceGrotesk/SpaceGrotesk-Regular.ttf", launcher);
+        }
+#elif defined(PLATFORM_TG5040) || defined(PLATFORM_TG5050) || defined(PLATFORM_MY355)
+        const char *sdcard = cat__sdcard_path();
+        if (sdcard && candidate_count < 8) {
+            snprintf(candidates[candidate_count++], PATH_MAX,
+                     "%s/.allium/fonts/Nunito.ttf", sdcard);
+        }
+        if (sdcard && candidate_count < 8) {
+            snprintf(candidates[candidate_count++], PATH_MAX,
+                     "%s/Themes/Allium/fonts/Nunito.ttf", sdcard);
+        }
+        if (sdcard && candidate_count < 8) {
+            snprintf(candidates[candidate_count++], PATH_MAX,
+                     "%s/.allium/fonts/font.ttf", sdcard);
+        }
+#endif
+        for (int i = 0; i < candidate_count; i++) {
+            if (access(candidates[i], R_OK) == 0) {
+                font_path = candidates[i];
+                break;
+            }
         }
     }
 
@@ -4462,7 +4595,7 @@ static bool cat__is_charging(void) {
 #  define CAT__CPU_FREQ_NORMAL      1680000
 #  define CAT__CPU_FREQ_PERFORMANCE 2160000
 #  define CAT__FAN_STATE_PATH     "/sys/class/thermal/cooling_device0/cur_state"
-#  define CAT__FAN_HELPER_PATH    "/mnt/SDCARD/.system/tg5050/bin/fancontrol"
+#  define CAT__FAN_HELPER_NAME    "fancontrol"
 #  define CAT__FAN_LOCK_PATH      "/var/run/fan-control.lock"
 #endif
 
@@ -4513,14 +4646,30 @@ static int cat__fan_stop_helper(void) {
     return CAT_OK;
 }
 
+static const char *cat__fan_helper_path(char *buf, size_t buf_size) {
+    const char *explicit_path = cat__env_nonempty("CAT_FAN_HELPER_PATH");
+    if (explicit_path) return explicit_path;
+
+    char system_buf[PATH_MAX];
+    const char *system_path = cat__system_path(system_buf, sizeof(system_buf));
+    if (!system_path || !buf || buf_size == 0) return NULL;
+    snprintf(buf, buf_size, "%s/bin/%s", system_path, CAT__FAN_HELPER_NAME);
+    return buf;
+}
+
 static bool cat__fan_helper_available(void) {
-    return access(CAT__FAN_HELPER_PATH, X_OK) == 0;
+    char helper_buf[PATH_MAX];
+    const char *helper = cat__fan_helper_path(helper_buf, sizeof(helper_buf));
+    return helper && access(helper, X_OK) == 0;
 }
 
 static int cat__fan_launch_helper(const char *arg) {
     char command[256];
+    char helper_buf[PATH_MAX];
+    const char *helper = cat__fan_helper_path(helper_buf, sizeof(helper_buf));
     if (!arg || !arg[0]) return CAT_ERROR;
-    snprintf(command, sizeof(command), "%s %s >/dev/null 2>&1 &", CAT__FAN_HELPER_PATH, arg);
+    if (!helper) return CAT_ERROR;
+    snprintf(command, sizeof(command), "%s %s >/dev/null 2>&1 &", helper, arg);
     return system(command) == 0 ? CAT_OK : CAT_ERROR;
 }
 
@@ -5261,16 +5410,14 @@ static void *cat__power_thread_func(void *arg) {
                     }
                     #elif defined(PLATFORM_TG5040) || defined(PLATFORM_TG5050)
                     {
-                        const char *sp = getenv("SYSTEM_PATH");
+                        char system_buf[PATH_MAX];
+                        const char *sp = cat__system_path(system_buf, sizeof(system_buf));
                         char suspend_cmd[256];
-                        #if defined(PLATFORM_TG5040)
-                        snprintf(suspend_cmd, sizeof(suspend_cmd), "%s/bin/suspend",
-                                 (sp && sp[0]) ? sp : "/mnt/SDCARD/.system/tg5040");
-                        #else
-                        snprintf(suspend_cmd, sizeof(suspend_cmd), "%s/bin/suspend",
-                                 (sp && sp[0]) ? sp : "/mnt/SDCARD/.system/tg5050");
-                        #endif
-                        cat__run_power_command("suspend", suspend_cmd);
+                        if (sp && sp[0] &&
+                            snprintf(suspend_cmd, sizeof(suspend_cmd), "%s/bin/suspend", sp) <
+                                (int)sizeof(suspend_cmd)) {
+                            cat__run_power_command("suspend", suspend_cmd);
+                        }
                     }
                     #endif
 
@@ -5391,18 +5538,12 @@ int cat_init(cat_config *cfg) {
     cat_stylesheet_init_default(&cat__g.stylesheet);
 
     /* Set themes directory from env var or platform default */
-    const char *td = getenv("CAT_THEMES_DIR");
+    const char *td = cat__env_nonempty("CAT_THEMES_DIR");
     if (td) {
         strncpy(cat__g.themes_dir, td, sizeof(cat__g.themes_dir) - 1);
         cat__g.themes_dir[sizeof(cat__g.themes_dir) - 1] = '\0';
     } else {
-#if defined(PLATFORM_MLP1)
-        strncpy(cat__g.themes_dir, "/mnt/sdcard/umrk-launcher/res/themes", sizeof(cat__g.themes_dir) - 1);
-#elif defined(PLATFORM_TG5040) || defined(PLATFORM_TG5050) || defined(PLATFORM_MY355)
-        strncpy(cat__g.themes_dir, "/mnt/SDCARD/Themes", sizeof(cat__g.themes_dir) - 1);
-#else
         cat__g.themes_dir[0] = '\0';
-#endif
     }
 
     /* Input defaults */
@@ -5649,12 +5790,16 @@ int cat_init(cat_config *cfg) {
     if (!cfg || !cfg->disable_background) {
         const char *bg_path = (cfg && cfg->bg_image_path) ? cfg->bg_image_path : NULL;
         if (!bg_path || !bg_path[0]) {
-            #if defined(PLATFORM_MLP1)
-            bg_path = "/mnt/sdcard/bg.png";
-            #elif CAT_PLATFORM_IS_DEVICE
-            bg_path = "/mnt/SDCARD/bg.png";
-            #else
             bg_path = getenv("CAT_BACKGROUND_PATH");
+            #if CAT_PLATFORM_IS_DEVICE
+            if (!bg_path || !bg_path[0]) {
+                static char bg_buf[PATH_MAX];
+                const char *sdcard = cat__sdcard_path();
+                if (sdcard) {
+                    snprintf(bg_buf, sizeof(bg_buf), "%s/bg.png", sdcard);
+                    bg_path = bg_buf;
+                }
+            }
             #endif
         }
 

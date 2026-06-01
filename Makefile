@@ -321,9 +321,11 @@ deploy:
 	fi; \
 	echo "Detected adb serial: $$SERIAL"; \
 	echo "Detected platform: $$PLATFORM"; \
+	REMOTE_SDCARD_PATH="$${REMOTE_SDCARD_PATH:-/mnt/SDCARD}"; \
+	REMOTE_TOOLS_PATH="$${REMOTE_TOOLS_PATH:-$$REMOTE_SDCARD_PATH/Tools}"; \
 	for example in $(EXAMPLES); do \
 		upper_name=$$(printf '%s' "$$example" | awk '{print toupper(substr($$0,1,1)) substr($$0,2)}'); \
-		pak_dir="/mnt/SDCARD/Tools/$$PLATFORM/$${upper_name}.pak"; \
+		pak_dir="$$REMOTE_TOOLS_PATH/$$PLATFORM/$${upper_name}.pak"; \
 		echo "Deploying $$example to $$pak_dir..."; \
 		$$ADB shell "mkdir -p '$$pak_dir'"; \
 		$$ADB push "$(BUILD_DIR)/$$PLATFORM/$$example/$$example" "$$pak_dir/$$example"; \

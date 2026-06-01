@@ -280,7 +280,7 @@ Parse a `#RRGGBB` string and apply it as the theme accent color: `cat_set_theme_
 
 #### `int cat_reload_background(const char *bg_path)`
 
-Reload the background image at runtime. Destroys the current background texture and loads a new one from `bg_path`. If `bg_path` is NULL or empty, falls back to `/mnt/SDCARD/bg.png` on device or the `CAT_BACKGROUND_PATH` environment variable on desktop. Returns `CAT_OK` on success (or if no fallback path is available), `CAT_ERROR` if the image cannot be loaded.
+Reload the background image at runtime. Destroys the current background texture and loads a new one from `bg_path`. If `bg_path` is NULL or empty, falls back to `CAT_BACKGROUND_PATH`, then `$SDCARD_PATH/bg.png` on device. Returns `CAT_OK` on success (or if no fallback path is available), `CAT_ERROR` if the image cannot be loaded.
 
 ### Fonts
 
@@ -757,8 +757,8 @@ hardware, `cat_get_fan_mode()` returns `CAT_FAN_MODE_UNSUPPORTED`.
 #### `int cat_set_fan_mode(cat_fan_mode mode)`
 
 Set the TG5050 fan mode. `CAT_FAN_MODE_MANUAL` stops any active `fancontrol` daemon without
-changing the current raw fan state. The auto modes launch the system's
-`/mnt/SDCARD/.system/tg5050/bin/fancontrol` helper with `quiet`, `normal`, or `performance`.
+changing the current raw fan state. The auto modes launch the `CAT_FAN_HELPER_PATH`
+override or `$SYSTEM_PATH/bin/fancontrol` with `quiet`, `normal`, or `performance`.
 Returns `CAT_ERROR` if an auto mode is requested and the helper is unavailable. No-op (returns
 `CAT_OK`) on non-TG5050 platforms and desktop builds.
 
@@ -1325,7 +1325,7 @@ typedef struct {
 
 | Platform | Default root |
 |----------|-------------|
-| Device (`CAT_PLATFORM_IS_DEVICE`) | `SDCARD_PATH` env var, or `/mnt/SDCARD` |
+| Device (`CAT_PLATFORM_IS_DEVICE`) | `SDCARD_PATH` env var, or the platform default SD card root |
 | Windows | `USERPROFILE` env var, or `.` |
 | macOS / Linux | `HOME` env var, or `.` |
 
