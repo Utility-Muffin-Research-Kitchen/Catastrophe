@@ -3150,7 +3150,21 @@ void cat_present(void) {
                 SDL_Delay(timeout);
             }
 #else
-            SDL_Delay(timeout);
+            /* Desktop/preview (Mac): SDL_Delay sleeps the main thread without
+             * servicing the Cocoa event loop, so a multi-second idle timeout
+             * beachballs the window and defers queued keyboard input until the
+             * delay expires. Pump events while waiting and bail the moment one
+             * is queued so the next cat_poll_input picks it up; short slices
+             * keep input latency low and the window-server happy. */
+            uint32_t deadline = now + (uint32_t)timeout;
+            for (;;) {
+                SDL_PumpEvents();
+                if (SDL_HasEvents(SDL_FIRSTEVENT, SDL_LASTEVENT)) break;
+                uint32_t t = SDL_GetTicks();
+                if (t >= deadline) break;
+                uint32_t slice = deadline - t;
+                SDL_Delay(slice > 5 ? 5 : slice);
+            }
 #endif
         }
         if (cat__g.next_redraw_ms != 0 && SDL_GetTicks() >= cat__g.next_redraw_ms) {
