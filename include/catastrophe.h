@@ -734,6 +734,9 @@ typedef struct {
     uint32_t      button_press_time[CAT_BTN_COUNT];
     uint32_t      button_repeat_time[CAT_BTN_COUNT];
 
+    /* Tab bar: right-side space to leave for an overlaid inline status bar. */
+    int           tab_bar_reserved_right;
+
     /* Footer overflow */
     cat_footer_overflow_opts footer_overflow_opts;
     bool          footer_overflow_active;
@@ -902,6 +905,10 @@ void           cat_draw_scrollbar(int x, int y, int h, int visible, int total, i
  * and the theme accent colour as the bar background. */
 void           cat_draw_tab_bar(const char *const *labels, int count, int active_index);
 int            cat_get_tab_bar_height(void);
+/* Reserve right-side width in the tab bar (e.g. for an inline status bar drawn
+   over it). When the tabs don't fit the remaining width, cat_draw_tab_bar()
+   windows them around the active tab and shows ‹ / › affordances. */
+void           cat_set_tab_bar_reserved_right(int px);
 /* Blit a texture into an arbitrary screen-space quadrilateral (4 corners in
  * clockwise order: top-left, top-right, bottom-right, bottom-left). Used for
  * the skewed parallelogram carousel panels in horizontal launcher mode.
@@ -5718,6 +5725,22 @@ int cat_get_tab_bar_height(void) {
     return bar_h < min_h ? min_h : bar_h;
 }
 
+void cat_set_tab_bar_reserved_right(int px) {
+    cat__g.tab_bar_reserved_right = px > 0 ? px : 0;
+}
+
+/* Filled triangle via SDL_RenderGeometry (no glyph needed), like cat_draw_star. */
+static void cat__fill_triangle(float ax, float ay, float bx, float by,
+                               float cx, float cy, ap_color c) {
+    SDL_Color col = { c.r, c.g, c.b, c.a };
+    SDL_Vertex v[3];
+    v[0].position = (SDL_FPoint){ ax, ay }; v[0].color = col; v[0].tex_coord = (SDL_FPoint){ 0, 0 };
+    v[1].position = (SDL_FPoint){ bx, by }; v[1].color = col; v[1].tex_coord = (SDL_FPoint){ 0, 0 };
+    v[2].position = (SDL_FPoint){ cx, cy }; v[2].color = col; v[2].tex_coord = (SDL_FPoint){ 0, 0 };
+    int idx[3] = { 0, 1, 2 };
+    SDL_RenderGeometry(cat__g.renderer, NULL, v, 3, idx, 3);
+}
+
 void cat_draw_tab_bar(const char *const *labels, int count, int active_index) {
     if (!labels || count <= 0) return;
     TTF_Font *font    = cat_get_font(CAT_FONT_SMALL);
@@ -5730,16 +5753,83 @@ void cat_draw_tab_bar(const char *const *labels, int count, int active_index) {
 
     int font_h = TTF_FontHeight(font);
     int text_y = (bar_h - font_h) / 2;
-    int x      = CAT_S(16);
     int underline_h = CAT_S(2);
+    int gap    = CAT_S(20);
+    int left_x = CAT_S(16);
+
+    if (active_index < 0) active_index = 0;
+    if (active_index >= count) active_index = count - 1;
+
+    /* Usable width for tabs: the bar minus any reserved right-side space (e.g.
+       an inline status bar drawn over the bar). */
+    int usable = sw - cat__g.tab_bar_reserved_right - left_x;
+    if (usable < CAT_S(40)) usable = CAT_S(40);
+
+    int label_w[count];
+    int total = 0;
     for (int i = 0; i < count; i++) {
+        label_w[i] = labels[i] ? cat_measure_text(font, labels[i]) : 0;
+        total += label_w[i] + gap;
+    }
+
+    /* Triangle affordance dimensions (drawn instead of text < / >). */
+    int tri_h  = font_h * 6 / 10;
+    int tri_w  = font_h * 4 / 10;
+    if (tri_w < CAT_S(6)) tri_w = CAT_S(6);
+    int chev_w = tri_w + gap;        /* horizontal space a chevron consumes */
+
+    /* Pick the visible window. If everything fits, show all. Otherwise grow a
+       window around the active tab; each step recomputes the FULL window width
+       counting only the chevrons actually needed, so reaching an end frees that
+       side's chevron space and we keep filling instead of stopping short. */
+    int first, last;
+    if (total <= usable) {
+        first = 0;
+        last  = count - 1;
+    } else {
+        first = last = active_index;
+        for (;;) {
+            int grew = 0;
+            if (last < count - 1) {
+                int f = first, l = last + 1, w = 0;
+                if (f > 0)         w += chev_w;
+                if (l < count - 1) w += chev_w;
+                for (int i = f; i <= l; i++) w += label_w[i] + gap;
+                if (w <= usable) { last = l; grew = 1; }
+            }
+            if (first > 0) {
+                int f = first - 1, l = last, w = 0;
+                if (f > 0)         w += chev_w;
+                if (l < count - 1) w += chev_w;
+                for (int i = f; i <= l; i++) w += label_w[i] + gap;
+                if (w <= usable) { first = f; grew = 1; }
+            }
+            if (!grew) break;
+        }
+    }
+
+    int tri_top = (bar_h - tri_h) / 2;
+    int tri_mid = bar_h / 2;
+    int x = left_x;
+    if (first > 0) {                 /* hidden tabs to the left → left triangle */
+        cat__fill_triangle((float)x, (float)tri_mid,
+                           (float)(x + tri_w), (float)tri_top,
+                           (float)(x + tri_w), (float)(tri_top + tri_h), inact_c);
+        x += tri_w + gap;
+    }
+    for (int i = first; i <= last; i++) {
         if (!labels[i]) continue;
         bool active = (i == active_index);
         int tw = cat_draw_text(font, labels[i], x, text_y,
                                active ? active_c : inact_c);
         if (active)
             cat_draw_rect(x, bar_h - underline_h, tw, underline_h, active_c);
-        x += tw + CAT_S(20);
+        x += tw + gap;
+    }
+    if (last < count - 1) {          /* hidden tabs to the right → right triangle */
+        cat__fill_triangle((float)x, (float)tri_top,
+                           (float)x, (float)(tri_top + tri_h),
+                           (float)(x + tri_w), (float)tri_mid, inact_c);
     }
 }
 
