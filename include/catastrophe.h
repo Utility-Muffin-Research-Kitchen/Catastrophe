@@ -4861,6 +4861,23 @@ static inline cat__status_bar_layout cat__resolve_status_bar_layout(const cat_st
     return layout;
 }
 
+/* Format the status-bar clock. 24-hour keeps its leading zero (e.g. 09:05);
+   12-hour modes drop the leading hour zero (e.g. 9:05, or 9:05 PM). */
+static void cat__format_clock(char *buf, size_t n, bool clock_24h, bool no_ampm) {
+    time_t now = time(NULL);
+    struct tm *t = localtime(&now);
+    if (clock_24h) {
+        strftime(buf, n, "%H:%M", t);
+    } else {
+        int hour = t->tm_hour % 12;
+        if (hour == 0) hour = 12;
+        if (no_ampm)
+            snprintf(buf, n, "%d:%02d", hour, t->tm_min);
+        else
+            snprintf(buf, n, "%d:%02d %s", hour, t->tm_min, t->tm_hour < 12 ? "AM" : "PM");
+    }
+}
+
 static int cat__measure_status_bar_width(const cat_status_bar_opts *opts, TTF_Font *font,
                                         const cat__status_bar_layout *layout) {
     if (!opts || !layout) return 0;
@@ -4886,14 +4903,7 @@ static int cat__measure_status_bar_width(const cat_status_bar_opts *opts, TTF_Fo
 
     if (layout->clock_visible && font) {
         char clock_text[32];
-        time_t now = time(NULL);
-        struct tm *t = localtime(&now);
-        if (layout->clock_24h)
-            strftime(clock_text, sizeof(clock_text), "%H:%M", t);
-        else if (layout->clock_no_ampm)
-            strftime(clock_text, sizeof(clock_text), "%I:%M", t);
-        else
-            strftime(clock_text, sizeof(clock_text), "%I:%M %p", t);
+        cat__format_clock(clock_text, sizeof(clock_text), layout->clock_24h, layout->clock_no_ampm);
         total_w += cat_measure_text(font, clock_text) + margin;
         has_any = true;
     }
@@ -5048,14 +5058,7 @@ void cat_draw_status_bar(cat_status_bar_opts *opts) {
     {
         if (layout.clock_visible) {
             char clock_text[32];
-            time_t now = time(NULL);
-            struct tm *t = localtime(&now);
-            if (layout.clock_24h)
-                strftime(clock_text, sizeof(clock_text), "%H:%M", t);
-            else if (layout.clock_no_ampm)
-                strftime(clock_text, sizeof(clock_text), "%I:%M", t);
-            else
-                strftime(clock_text, sizeof(clock_text), "%I:%M %p", t);
+            cat__format_clock(clock_text, sizeof(clock_text), layout.clock_24h, layout.clock_no_ampm);
             int th = TTF_FontHeight(font);
             int ty = cy + (pill_h - th) / 2;
             cat_draw_text(font, clock_text, cx, ty, cat__g.theme.hint);

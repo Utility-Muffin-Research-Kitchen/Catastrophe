@@ -28,6 +28,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **Status-bar 12-hour clock leading zero** (`catastrophe.h`): 12-hour clock modes (with and without AM/PM) no longer pad the hour with a leading zero — e.g. `9:05 AM` / `9:05` instead of `09:05`. 24-hour mode keeps its leading zero. Width-measure and draw now share a single `cat__format_clock()` helper.
 - **MLP1 warning cleanup** (`catastrophe.h`): stylesheet wallpaper path formatting now uses a bounded buffer sized for the full theme directory/name/wallpaper path and checks `snprintf()` before reloading the background. Platform sysfs and power-command helpers are now compiled only for the backends that use them, avoiding unused-helper warnings without broad warning suppression.
 - **macOS native link** (`Makefile`): link desktop examples with Cocoa so the window activation helper resolves Objective-C runtime symbols.
 
