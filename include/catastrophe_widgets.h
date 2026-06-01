@@ -542,6 +542,51 @@ void cat_draw_list_pane(int x, int y, int w, int h,
                          void *user);
 
 /* ═══════════════════════════════════════════════════════════════════════════
+ * Scroll View
+ *
+ * A non-interactive vertical scroll container for content taller than its
+ * viewport — long text, info / credits lists, and the like. Unlike
+ * cat_draw_list_pane there is no cursor or selection, only a scroll offset.
+ * Drive it from input with cat_scroll_state_move() (e.g. one line height per
+ * Up/Down) and render it with cat_draw_scroll_view().
+ *
+ * Typical usage:
+ *   cat_scroll_state sv;
+ *   cat_scroll_state_init(&sv);
+ *
+ *   // on input:
+ *   cat_scroll_state_move(&sv, +line_h);   // Down   (-line_h for Up)
+ *
+ *   // in render:
+ *   cat_draw_scroll_view(x, y, w, h, content_h, &sv, draw_cb, ctx);
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+typedef struct {
+    int offset;   /* vertical scroll offset in pixels (>= 0) */
+} cat_scroll_state;
+
+/* Render callback: draw the full content with its top-left at (x, y). The view
+ * has already shifted y for the scroll offset and clipped to the viewport, so
+ * just draw every item at its natural position. */
+typedef void (*cat_scroll_content_fn)(int x, int y, int w, void *user);
+
+void cat_scroll_state_init(cat_scroll_state *s);
+
+/* Adjust the scroll offset by delta_px (negative scrolls up). Lower-bounded at
+ * 0 here; the upper bound is applied by cat_draw_scroll_view once it knows the
+ * viewport and content heights, so this is safe to call freely from input. */
+void cat_scroll_state_move(cat_scroll_state *s, int delta_px);
+
+/* Draw scrollable content inside (x,y,w,h). content_height is the full natural
+ * height of the content. Clamps state->offset to [0, content_height - h] (and
+ * stores the clamp), clips drawing to the rect, calls draw() with the content
+ * origin already shifted for the scroll offset, then draws a scrollbar when the
+ * content overflows. */
+void cat_draw_scroll_view(int x, int y, int w, int h, int content_height,
+                          cat_scroll_state *state,
+                          cat_scroll_content_fn draw, void *user);
+
+/* ═══════════════════════════════════════════════════════════════════════════
  * IMPLEMENTATION
  * ═══════════════════════════════════════════════════════════════════════════ */
 #ifdef CAT_WIDGETS_IMPLEMENTATION
@@ -5579,6 +5624,48 @@ void cat_draw_list_pane(int x, int y, int w, int h,
     if (item_count > visible)
         cat_draw_scrollbar(x + w - CAT_S(4), y, h - CAT_S(4),
                            visible, item_count, state->scroll_offset);
+}
+
+void cat_scroll_state_init(cat_scroll_state *s) {
+    if (s) s->offset = 0;
+}
+
+void cat_scroll_state_move(cat_scroll_state *s, int delta_px) {
+    if (!s) return;
+    s->offset += delta_px;
+    if (s->offset < 0) s->offset = 0;
+}
+
+void cat_draw_scroll_view(int x, int y, int w, int h, int content_height,
+                          cat_scroll_state *state,
+                          cat_scroll_content_fn draw, void *user) {
+    if (!state || !draw || w <= 0 || h <= 0) return;
+
+    int max_offset = content_height - h;
+    if (max_offset < 0) max_offset = 0;
+    if (state->offset < 0) state->offset = 0;
+    if (state->offset > max_offset) state->offset = max_offset;
+
+    SDL_Renderer *renderer = cat_get_renderer();
+    SDL_bool had_clip = SDL_RenderIsClipEnabled(renderer);
+    SDL_Rect prev_clip;
+    if (had_clip) SDL_RenderGetClipRect(renderer, &prev_clip);
+
+    /* When a scrollbar will be shown, hand the content a width that excludes
+       the scrollbar gutter so text never sits underneath the bar. */
+    bool show_bar = content_height > h;
+    int content_w = show_bar ? w - CAT_S(12) : w;
+    if (content_w < 1) content_w = 1;
+
+    SDL_Rect clip = { x, y, w, h };
+    SDL_RenderSetClipRect(renderer, &clip);
+
+    draw(x, y - state->offset, content_w, user);
+
+    SDL_RenderSetClipRect(renderer, had_clip ? &prev_clip : NULL);
+
+    if (show_bar)
+        cat_draw_scrollbar(x + w - CAT_S(4), y, h, h, content_height, state->offset);
 }
 
 #endif /* CAT_WIDGETS_IMPLEMENTATION */

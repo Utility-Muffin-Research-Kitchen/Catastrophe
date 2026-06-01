@@ -654,3 +654,32 @@ cat_download_result result;
 int rc = cat_download_manager(downloads, 2, &opts, &result);
 if (rc == CAT_OK) printf("%d/%d succeeded\n", result.completed, result.total);
 ```
+
+## Scroll View (`cat_draw_scroll_view`)
+
+A non-selectable vertical scroll container for content that is taller than its
+viewport — long text, info / credits lists, and the like. Unlike `cat_list` /
+`cat_draw_list_pane` there is no cursor or selection, only a scroll offset.
+
+**Features**:
+- Caller-owned scroll state (`cat_scroll_state` — just a pixel offset)
+- Clamps the offset to the viewport (`[0, content_height - h]`) and stores it
+- Reserves a scrollbar gutter so content never sits under the bar
+- Clips drawing to the rect and draws a scrollbar when the content overflows
+- Composes with `cat_draw_text_marquee()` (long lines scroll instead of truncating)
+
+**Usage**:
+```c
+static cat_scroll_state sv;          /* persisted across frames */
+cat_scroll_state_init(&sv);          /* once, e.g. when the screen opens */
+
+/* on input: */
+cat_scroll_state_move(&sv, +line_h); /* Down (-line_h for Up) */
+
+/* in render — draw_cb lays out the full content at (x, y); the view shifts y
+   for the scroll offset and clips: */
+cat_draw_scroll_view(x, y, w, h, content_height, &sv, draw_cb, ctx);
+```
+
+The content callback receives a width that already excludes the scrollbar
+gutter when a bar is shown, so right-aligned text stays clear of it.

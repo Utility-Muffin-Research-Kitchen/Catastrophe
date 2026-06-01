@@ -923,13 +923,24 @@ void           cat_text_scroll_init(cat_text_scroll *s);
 void           cat_text_scroll_update(cat_text_scroll *s, int text_w, int visible_w, uint32_t dt_ms);
 void           cat_text_scroll_reset(cat_text_scroll *s);
 
-/* Looping marquee: draws text at (x,y) clipped to visible_w. If it fits, draws
-   normally and returns false. If it overflows, after a brief initial pause it
-   scrolls left continuously and loops back to the start (a second copy follows
-   a gap for a seamless wrap). Caller persists `m` across frames, passes elapsed
-   dt_ms, and resets m->elapsed_ms to 0 when the text changes. Returns true
-   while scrolling so the caller can request another frame. */
-typedef struct { uint32_t elapsed_ms; } cat_marquee;
+/* Marquee scroll mode (set cat_marquee.mode before the first draw; 0 = loop). */
+typedef enum {
+    CAT_MARQUEE_LOOP = 0,    /* scroll left continuously and wrap around       */
+    CAT_MARQUEE_PINGPONG     /* scroll to the end, pause, scroll back, repeat  */
+} cat_marquee_mode;
+
+/* Marquee: draws text at (x,y) clipped to visible_w. If it fits, draws normally
+   and returns false. If it overflows, after a brief initial pause it scrolls —
+   either looping (a second copy follows a gap for a seamless wrap) or bouncing
+   back and forth, per `mode`. Caller persists `m` across frames, passes elapsed
+   dt_ms, and resets m->elapsed_ms to 0 when the text changes. Returns true while
+   scrolling so the caller can request another frame. The clip is intersected
+   with any clip already in effect and restored on exit, so it composes inside a
+   scroll view. */
+typedef struct {
+    uint32_t         elapsed_ms;
+    cat_marquee_mode mode;       /* default 0 = loop */
+} cat_marquee;
 bool           cat_draw_text_marquee(TTF_Font *font, const char *text, int x, int y,
                                      ap_color color, int visible_w,
                                      cat_marquee *m, uint32_t dt_ms);
@@ -3845,22 +3856,62 @@ bool cat_draw_text_marquee(TTF_Font *font, const char *text, int x, int y,
 
     if (m) m->elapsed_ms += dt_ms;
     uint32_t elapsed = m ? m->elapsed_ms : 0;
+    cat_marquee_mode mode = m ? m->mode : CAT_MARQUEE_LOOP;
 
-    int gap = visible_w / 3;
-    if (gap < CAT_S(28)) gap = CAT_S(28);
-    int period = text_w + gap;                 /* one full loop in pixels */
+    const uint32_t pause_ms   = 900;           /* hold before/at the turns */
+    const int      speed_px_s = CAT_S(70);
 
-    const uint32_t pause_ms    = 900;          /* hold at the start first */
-    const int      speed_px_s  = CAT_S(70);
-    uint32_t scroll_ms = (elapsed > pause_ms) ? (elapsed - pause_ms) : 0;
-    int off = (int)(((uint64_t)scroll_ms * (uint64_t)speed_px_s) / 1000u);
-    if (period > 0) off %= period;
+    int off = 0;
+    int wrap_period = 0;                        /* >0 → draw a wrap copy (loop only) */
 
-    SDL_Rect clip = { x, y, visible_w, TTF_FontHeight(font) };
-    SDL_RenderSetClipRect(cat__g.renderer, &clip);
+    if (mode == CAT_MARQUEE_PINGPONG) {
+        /* Scroll out to the far edge, pause, scroll back, pause, repeat. */
+        int max_off = text_w - visible_w;
+        if (max_off < 1) max_off = 1;
+        int speed = speed_px_s > 0 ? speed_px_s : 1;
+        uint32_t travel_ms = (uint32_t)(((uint64_t)max_off * 1000u) / (uint64_t)speed);
+        if (travel_ms < 1) travel_ms = 1;
+        uint32_t cycle = pause_ms + travel_ms + pause_ms + travel_ms;
+        uint32_t t = cycle ? (elapsed % cycle) : 0;
+        if (t < pause_ms) {
+            off = 0;
+        } else if (t < pause_ms + travel_ms) {
+            off = (int)(((uint64_t)(t - pause_ms) * (uint64_t)speed) / 1000u);
+        } else if (t < pause_ms + travel_ms + pause_ms) {
+            off = max_off;
+        } else {
+            uint32_t back = t - (pause_ms + travel_ms + pause_ms);
+            off = max_off - (int)(((uint64_t)back * (uint64_t)speed) / 1000u);
+        }
+        if (off < 0) off = 0;
+        if (off > max_off) off = max_off;
+    } else {
+        int gap = visible_w / 3;
+        if (gap < CAT_S(28)) gap = CAT_S(28);
+        wrap_period = text_w + gap;             /* one full loop in pixels */
+        uint32_t scroll_ms = (elapsed > pause_ms) ? (elapsed - pause_ms) : 0;
+        off = (int)(((uint64_t)scroll_ms * (uint64_t)speed_px_s) / 1000u);
+        if (wrap_period > 0) off %= wrap_period;
+    }
+
+    /* Clip to this cell, intersected with any clip already in effect, so the
+       marquee composes correctly inside a clipped region (e.g. a scroll view),
+       and restore the previous clip on exit rather than clearing it. */
+    SDL_bool had_clip = SDL_RenderIsClipEnabled(cat__g.renderer);
+    SDL_Rect prev_clip;
+    if (had_clip) SDL_RenderGetClipRect(cat__g.renderer, &prev_clip);
+    SDL_Rect cell = { x, y, visible_w, TTF_FontHeight(font) };
+    SDL_Rect use_clip = cell;
+    if (had_clip && !SDL_IntersectRect(&prev_clip, &cell, &use_clip)) {
+        /* This cell is entirely outside the outer clip — draw nothing. */
+        SDL_RenderSetClipRect(cat__g.renderer, &prev_clip);
+        return true;
+    }
+    SDL_RenderSetClipRect(cat__g.renderer, &use_clip);
     cat_draw_text(font, text, x - off, y, color);
-    cat_draw_text(font, text, x - off + period, y, color);  /* wrap-around copy */
-    SDL_RenderSetClipRect(cat__g.renderer, NULL);
+    if (wrap_period > 0)
+        cat_draw_text(font, text, x - off + wrap_period, y, color);  /* wrap-around copy */
+    SDL_RenderSetClipRect(cat__g.renderer, had_clip ? &prev_clip : NULL);
     return true;
 }
 
