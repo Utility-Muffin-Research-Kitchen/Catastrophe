@@ -4040,8 +4040,8 @@ bool cat_draw_text_marquee(TTF_Font *font, const char *text, int x, int y,
         if (off < 0) off = 0;
         if (off > max_off) off = max_off;
     } else {
-        int gap = visible_w / 3;
-        if (gap < CAT_S(28)) gap = CAT_S(28);
+        int gap = visible_w / 9;
+        if (gap < CAT_S(10)) gap = CAT_S(10);
         wrap_period = text_w + gap;             /* one full loop in pixels */
         uint32_t scroll_ms = (elapsed > pause_ms) ? (elapsed - pause_ms) : 0;
         off = (int)(((uint64_t)scroll_ms * (uint64_t)speed_px_s) / 1000u);
