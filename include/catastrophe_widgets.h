@@ -523,6 +523,7 @@ typedef void (*cat_list_item_draw_fn)(int idx, int x, int y, int w, int h,
                                        bool selected, void *user);
 
 void cat_list_state_init(cat_list_state *s, int visible_rows);
+/* Moves the cursor by delta, wrapping around the ends (top<->bottom). */
 void cat_list_state_move(cat_list_state *s, int delta, int count);
 void cat_list_state_page(cat_list_state *s, int delta, int count);
 void cat_list_state_jump(cat_list_state *s, int target, int count);
@@ -5542,9 +5543,10 @@ static void cat__ls_clamp(cat_list_state *s, int count) {
 
 void cat_list_state_move(cat_list_state *s, int delta, int count) {
     if (!s || delta == 0 || count <= 0) return;
-    int next = s->cursor + delta;
-    if (next < 0)     next = 0;
-    if (next >= count) next = count - 1;
+    /* Wrap around the ends (top<->bottom) rather than clamping, matching the
+       tab navigation. Modulo keeps it correct for any delta magnitude. */
+    int next = (s->cursor + delta) % count;
+    if (next < 0) next += count;
     s->cursor = next;
     cat__ls_clamp(s, count);
 }
