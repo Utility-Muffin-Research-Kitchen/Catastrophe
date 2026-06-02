@@ -5109,8 +5109,8 @@ static inline cat__status_bar_layout cat__resolve_status_bar_layout(const cat_st
     if (!opts) return layout;
 
     layout.use_sprite_layout    = (cat__g.status_assets != NULL);
-    layout.battery_visible      = opts->show_battery;
-    layout.battery_level_visible = opts->show_battery && opts->show_battery_level;
+    layout.battery_visible      = opts->show_battery;        /* the sprite icon */
+    layout.battery_level_visible = opts->show_battery_level;  /* the "85%" number — independent of the icon */
     layout.clock_24h            = opts->use_24h;
     layout.clock_no_ampm        = opts->no_ampm;
 
@@ -5184,15 +5184,19 @@ static int cat__measure_status_bar_width(const cat_status_bar_opts *opts, TTF_Fo
         has_any = true;
     }
 
-    if (layout->battery_visible) {
-        int battery_w = layout->use_sprite_layout ? (CAT__BATTERY_W * s)
-                                                  : (font ? cat_measure_text(font, "BAT") : CAT__BATTERY_W * s);
-        total_w += battery_w;
+    if (layout->battery_visible || layout->battery_level_visible) {
+        bool drew = false;
+        if (layout->battery_visible) {
+            int battery_w = layout->use_sprite_layout ? (CAT__BATTERY_W * s)
+                                                      : (font ? cat_measure_text(font, "BAT") : CAT__BATTERY_W * s);
+            total_w += battery_w;
+            drew = true;
+        }
         /* Reserve the widest string ("100%") so the pill doesn't resize as the
            digit count changes. A tight gap groups the number with its icon. */
         if (layout->battery_level_visible && font) {
-            int level_gap = (margin > 1) ? margin / 2 : 1;
-            total_w += level_gap + cat_measure_text(font, "100%");
+            if (drew) total_w += (margin > 1) ? margin / 2 : 1;
+            total_w += cat_measure_text(font, "100%");
         }
         total_w += margin;
         has_any = true;
@@ -5359,26 +5363,29 @@ void cat_draw_status_bar(cat_status_bar_opts *opts) {
         }
     }
 
-    /* Battery icon (+ optional "85%" to its right) */
-    if (opts->show_battery) {
+    /* Battery: icon and/or "85%", in any combination (Off / Icon / % / Both) */
+    if (layout.battery_visible || layout.battery_level_visible) {
         int iw = CAT__BATTERY_W * s;
         int ih = CAT__BATTERY_H * s;
         int iy = cy + (pill_h - ih) / 2;
         int ty = cy + (pill_h - TTF_FontHeight(font)) / 2;
+        bool drew_icon = false;
 
-        if (cat__g.status_assets) {
-            cat__draw_status_bar_battery_sprite(cx, iy, font);
-            cx += iw;
-        } else {
-            cat_draw_text(font, "BAT", cx, ty, cat__g.theme.hint);
-            cx += cat_measure_text(font, "BAT");
+        if (layout.battery_visible) {
+            if (cat__g.status_assets) {
+                cat__draw_status_bar_battery_sprite(cx, iy, font);
+                cx += iw;
+            } else {
+                cat_draw_text(font, "BAT", cx, ty, cat__g.theme.hint);
+                cx += cat_measure_text(font, "BAT");
+            }
+            drew_icon = true;
         }
 
         if (layout.battery_level_visible) {
             char level_text[8];
             if (cat__battery_level_text(level_text, sizeof(level_text)) >= 0) {
-                int level_gap = (margin > 1) ? margin / 2 : 1;
-                cx += level_gap;
+                if (drew_icon) cx += (margin > 1) ? margin / 2 : 1;
                 cat_draw_text(font, level_text, cx, ty, cat__g.theme.hint);
                 cx += cat_measure_text(font, "100%");   /* reserved width keeps the pill stable */
             }
