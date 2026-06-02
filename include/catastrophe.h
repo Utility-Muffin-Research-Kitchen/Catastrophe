@@ -892,6 +892,14 @@ bool           cat_poll_combo(cat_combo_event *event);
  * Public API — Drawing Primitives
  * ═══════════════════════════════════════════════════════════════════════════ */
 
+/* Cardinal direction, e.g. which way a cat_draw_triangle affordance points. */
+typedef enum {
+    CAT_DIR_LEFT = 0,
+    CAT_DIR_RIGHT,
+    CAT_DIR_UP,
+    CAT_DIR_DOWN,
+} cat_dir;
+
 void           cat_clear_screen(void);
 void           cat_present(void);
 void           cat_draw_background(void);
@@ -900,6 +908,7 @@ void           cat_draw_pill(int x, int y, int w, int h, ap_color c);
 void           cat_draw_rect(int x, int y, int w, int h, ap_color c);
 void           cat_draw_circle(int cx, int cy, int r, ap_color c);
 void           cat_draw_star(int cx, int cy, int outer_r, ap_color c); /* filled 5-point star centered at (cx,cy) */
+void           cat_draw_triangle(int x, int y, int w, int h, cat_dir dir, ap_color c); /* solid triangle filling the box, pointing `dir` (cycler/affordance arrows) */
 int            cat_draw_text(TTF_Font *font, const char *text, int x, int y, ap_color color);          /* returns rendered width in pixels */
 int            cat_draw_text_clipped(TTF_Font *font, const char *text, int x, int y, ap_color color, int max_w); /* returns rendered width */
 int            cat_draw_text_ellipsized(TTF_Font *font, const char *text, int x, int y, ap_color color, int max_w); /* truncate with "..." if too wide */
@@ -5900,6 +5909,19 @@ static void cat__fill_triangle(float ax, float ay, float bx, float by,
     SDL_RenderGeometry(cat__g.renderer, NULL, v, 3, idx, 3);
 }
 
+void cat_draw_triangle(int x, int y, int w, int h, cat_dir dir, ap_color c) {
+    if (w <= 0 || h <= 0) return;
+    float l = (float)x, t = (float)y, r = (float)(x + w), b = (float)(y + h);
+    float mid_x = (float)x + (float)w * 0.5f;
+    float mid_y = (float)y + (float)h * 0.5f;
+    switch (dir) {
+        case CAT_DIR_LEFT:  cat__fill_triangle(l, mid_y, r, t, r, b, c); break;
+        case CAT_DIR_RIGHT: cat__fill_triangle(l, t, l, b, r, mid_y, c); break;
+        case CAT_DIR_UP:    cat__fill_triangle(l, b, r, b, mid_x, t, c); break;
+        case CAT_DIR_DOWN:  cat__fill_triangle(l, t, r, t, mid_x, b, c); break;
+    }
+}
+
 void cat_draw_tab_bar(const char *const *labels, int count, int active_index) {
     if (!labels || count <= 0) return;
     TTF_Font *font    = cat_get_font(CAT_FONT_SMALL);
@@ -5968,12 +5990,9 @@ void cat_draw_tab_bar(const char *const *labels, int count, int active_index) {
     }
 
     int tri_top = (bar_h - tri_h) / 2;
-    int tri_mid = bar_h / 2;
     int x = left_x;
     if (first > 0) {                 /* hidden tabs to the left → left triangle */
-        cat__fill_triangle((float)x, (float)tri_mid,
-                           (float)(x + tri_w), (float)tri_top,
-                           (float)(x + tri_w), (float)(tri_top + tri_h), inact_c);
+        cat_draw_triangle(x, tri_top, tri_w, tri_h, CAT_DIR_LEFT, inact_c);
         x += tri_w + gap;
     }
     for (int i = first; i <= last; i++) {
@@ -5986,9 +6005,7 @@ void cat_draw_tab_bar(const char *const *labels, int count, int active_index) {
         x += tw + gap;
     }
     if (last < count - 1) {          /* hidden tabs to the right → right triangle */
-        cat__fill_triangle((float)x, (float)tri_top,
-                           (float)x, (float)(tri_top + tri_h),
-                           (float)(x + tri_w), (float)tri_mid, inact_c);
+        cat_draw_triangle(x, tri_top, tri_w, tri_h, CAT_DIR_RIGHT, inact_c);
     }
 }
 
