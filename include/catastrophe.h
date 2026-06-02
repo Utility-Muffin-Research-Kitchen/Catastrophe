@@ -5137,32 +5137,58 @@ static void cat__draw_status_bar_battery_sprite(int x, int y, TTF_Font *font) {
     bool charging = cat__is_charging();
     (void)font;
 
+    /* Interior cavity for the fill bar. The terminal nub shifts the interior left
+       by ~1px, so the bar sits at +2 (not +3) to stay centered. */
+    int cav_x = x + 2 * s, cav_y = y + 2 * s, cav_w = 12 * s, cav_h = 6 * s;
+    ap_color charge_green = { 0x4C, 0xD9, 0x64, 0xFF };
+    ap_color low_red      = { 0xFF, 0x3B, 0x30, 0xFF };
+
     if (charging) {
+        /* Animated rising green fill — reads as "charging". Self-drives the next
+           frame so it keeps animating without the app polling. */
         cat__blit_status_icon(47, 51, CAT__BATTERY_W, CAT__BATTERY_H,
                              x, y, iw, ih, cat__g.theme.hint);
-        /* Fill/charge bar sits at x+2 (not +3): the battery's right-side terminal nub
-           shifts the interior left by ~1px, so this keeps the bar centered in the cavity. */
-        cat__blit_status_icon(81, 41, 12, 6,
-                             x + 2 * s, y + 2 * s,
-                             12 * s, 6 * s, cat__g.theme.hint);
-    } else {
-        bool low = (bat >= 0 && bat <= 10);
-        cat__blit_status_icon(low ? 66 : 47, 51, CAT__BATTERY_W, CAT__BATTERY_H,
-                             x, y, iw, ih, cat__g.theme.hint);
-        if (bat >= 0) {
-            int fill_src_x = (bat <= 20) ? 1 : 81;
-            int fill_src_y = (bat <= 20) ? 55 : 33;
-            int fill_full_w = 12 * s;
-            int fill_h_px = 6 * s;
-            int fill_w = fill_full_w * bat / 100;
-            int clip_off = fill_full_w - fill_w;
-            if (fill_w > 0) {
-                SDL_Rect fsrc = { fill_src_x * s + clip_off, fill_src_y * s, fill_w, fill_h_px };
-                SDL_Rect fdst = { x + 2 * s + clip_off, y + 2 * s, fill_w, fill_h_px };
-                SDL_SetTextureColorMod(cat__g.status_assets, cat__g.theme.hint.r, cat__g.theme.hint.g, cat__g.theme.hint.b);
-                SDL_SetTextureAlphaMod(cat__g.status_assets, cat__g.theme.hint.a);
-                SDL_RenderCopy(cat__g.renderer, cat__g.status_assets, &fsrc, &fdst);
-            }
+        uint32_t period = 3000u;                   /* ~3s per fill sweep */
+        uint32_t phase = SDL_GetTicks() % period;
+        int level = (int)(phase * 100u / period);  /* 0..99, loops */
+        int fill_w = cav_w * level / 100;
+        if (fill_w > 0) cat_draw_rect(cav_x, cav_y, fill_w, cav_h, charge_green);
+        cat_request_frame_in(60);
+        return;
+    }
+
+    bool low = (bat >= 0 && bat <= 10);
+    if (low) {
+        /* Flash the battery red when critically low (~0.6s on, 0.6s normal). */
+        bool on = (SDL_GetTicks() % 1200u) < 700u;
+        ap_color frame_c = on ? low_red : cat__g.theme.hint;
+        cat__blit_status_icon(66, 51, CAT__BATTERY_W, CAT__BATTERY_H,
+                             x, y, iw, ih, frame_c);
+        if (on && bat > 0) {
+            int fill_w = cav_w * bat / 100;
+            if (fill_w < s) fill_w = s;
+            cat_draw_rect(cav_x, cav_y, fill_w, cav_h, low_red);
+        }
+        cat_request_frame_in(120);
+        return;
+    }
+
+    /* Normal: themed sprite fill scaled to the charge level, anchored LEFT so it
+       drains/fills left-to-right (empty space on the right, like a real battery). */
+    cat__blit_status_icon(47, 51, CAT__BATTERY_W, CAT__BATTERY_H,
+                         x, y, iw, ih, cat__g.theme.hint);
+    if (bat >= 0) {
+        int fill_src_x = (bat <= 20) ? 1 : 81;
+        int fill_src_y = (bat <= 20) ? 55 : 33;
+        int fill_full_w = 12 * s;
+        int fill_h_px = 6 * s;
+        int fill_w = fill_full_w * bat / 100;
+        if (fill_w > 0) {
+            SDL_Rect fsrc = { fill_src_x * s, fill_src_y * s, fill_w, fill_h_px };
+            SDL_Rect fdst = { cav_x, cav_y, fill_w, fill_h_px };
+            SDL_SetTextureColorMod(cat__g.status_assets, cat__g.theme.hint.r, cat__g.theme.hint.g, cat__g.theme.hint.b);
+            SDL_SetTextureAlphaMod(cat__g.status_assets, cat__g.theme.hint.a);
+            SDL_RenderCopy(cat__g.renderer, cat__g.status_assets, &fsrc, &fdst);
         }
     }
 }
