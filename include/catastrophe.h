@@ -5192,11 +5192,15 @@ static int cat__measure_status_bar_width(const cat_status_bar_opts *opts, TTF_Fo
             total_w += battery_w;
             drew = true;
         }
-        /* Reserve the widest string ("100%") so the pill doesn't resize as the
-           digit count changes. A tight gap groups the number with its icon. */
+        /* Size to the actual number so it sits tight against the clock. The pill
+           tracks the digit count, just like the clock's changing minutes. A tight
+           gap groups the number with its icon when both are shown. */
         if (layout->battery_level_visible && font) {
-            if (drew) total_w += (margin > 1) ? margin / 2 : 1;
-            total_w += cat_measure_text(font, "100%");
+            char level_text[8];
+            if (cat__battery_level_text(level_text, sizeof(level_text)) >= 0) {
+                if (drew) total_w += (margin > 1) ? margin / 2 : 1;
+                total_w += cat_measure_text(font, level_text);
+            }
         }
         total_w += margin;
         has_any = true;
@@ -5387,7 +5391,7 @@ void cat_draw_status_bar(cat_status_bar_opts *opts) {
             if (cat__battery_level_text(level_text, sizeof(level_text)) >= 0) {
                 if (drew_icon) cx += (margin > 1) ? margin / 2 : 1;
                 cat_draw_text(font, level_text, cx, ty, cat__g.theme.hint);
-                cx += cat_measure_text(font, "100%");   /* reserved width keeps the pill stable */
+                cx += cat_measure_text(font, level_text);   /* actual width — sits tight against the clock */
             }
         }
         cx += margin;
