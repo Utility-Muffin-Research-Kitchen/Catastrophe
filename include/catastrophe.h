@@ -188,6 +188,7 @@ typedef enum {
     CAT_BTN_MENU,
     CAT_BTN_POWER,
     CAT_BTN_QUIT,
+    CAT_BTN_STICK,   /* analog-stick click (L3/thumb) */
     CAT_BTN_COUNT
 } cat_button;
 
@@ -2395,7 +2396,7 @@ static cat_button cat__map_joy_button(uint8_t btn) {
         case CAT__MLP1_BTN_SELECT: return CAT_BTN_SELECT;
         case CAT__MLP1_BTN_START:  return CAT_BTN_START;
         case CAT__MLP1_BTN_MENU:   return CAT_BTN_MENU;
-        case CAT__MLP1_BTN_STICK:  return CAT_BTN_NONE;
+        case CAT__MLP1_BTN_STICK:  return CAT_BTN_STICK;
         default:
             cat_log("MLP1 input: unmapped joystick button=%u", (unsigned)btn);
             return CAT_BTN_NONE;
