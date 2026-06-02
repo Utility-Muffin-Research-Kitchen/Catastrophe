@@ -365,6 +365,7 @@ typedef struct {
     int      ui_padding_x;      /* Pill internal horizontal padding (unscaled; pass through CAT_DS) */
     int      ui_padding_y;      /* Pill internal vertical padding (unscaled) */
     float    pill_radius_ratio; /* Corner radius as a fraction of pill height/2. 0=rectangle, 1=full cap. */
+    int      pill_corner_mask;  /* Which corners round (CAT_CORNER_* bitmask). 0/ALL = all four (default). */
 } ap_theme;
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -900,10 +901,20 @@ typedef enum {
     CAT_DIR_DOWN,
 } cat_dir;
 
+/* Corner selection bitmask for cat_draw_rounded_rect_ex / pill_corner_mask. */
+enum {
+    CAT_CORNER_TL  = 1 << 0,
+    CAT_CORNER_TR  = 1 << 1,
+    CAT_CORNER_BL  = 1 << 2,
+    CAT_CORNER_BR  = 1 << 3,
+    CAT_CORNER_ALL = CAT_CORNER_TL | CAT_CORNER_TR | CAT_CORNER_BL | CAT_CORNER_BR,
+};
+
 void           cat_clear_screen(void);
 void           cat_present(void);
 void           cat_draw_background(void);
 void           cat_draw_rounded_rect(int x, int y, int w, int h, int r, ap_color c);
+void           cat_draw_rounded_rect_ex(int x, int y, int w, int h, int r, unsigned corners, ap_color c); /* round only the corners in the CAT_CORNER_* mask; others are square */
 void           cat_draw_pill(int x, int y, int w, int h, ap_color c);
 void           cat_draw_rect(int x, int y, int w, int h, ap_color c);
 void           cat_draw_circle(int cx, int cy, int r, ap_color c);
@@ -3379,17 +3390,24 @@ static void cat__fill_circle_quadrant(int cx, int cy, int r, int quadrant) {
     }
 }
 
-void cat_draw_rounded_rect(int x, int y, int w, int h, int r, ap_color c) {
+void cat_draw_rounded_rect_ex(int x, int y, int w, int h, int r, unsigned corners, ap_color c) {
     SDL_Renderer *rend = cat__g.renderer;
     if (r > h / 2) r = h / 2;
     if (r > w / 2) r = w / 2;
     if (r < 0) r = 0;
+    if (corners == 0 || r == 0) { cat_draw_rect(x, y, w, h, c); return; }
+
+    bool round_tl = (corners & CAT_CORNER_TL) != 0;
+    bool round_tr = (corners & CAT_CORNER_TR) != 0;
+    bool round_bl = (corners & CAT_CORNER_BL) != 0;
+    bool round_br = (corners & CAT_CORNER_BR) != 0;
 
     /* Use quarter-circle sprites from the pill asset for smooth AA whenever
        the assets spritesheet is available.
        The 30×30 white pill at (1,1) in assets@Nx.png is a perfect circle — each
-       quadrant scaled to the corner radius via bilinear-filtered SDL_RenderCopy. */
-    if (cat__g.status_assets && r > 0) {
+       quadrant scaled to the corner radius via bilinear-filtered SDL_RenderCopy.
+       Corners not in the mask are filled square instead. */
+    if (cat__g.status_assets) {
         int s = cat__g.status_asset_scale;
         int sx = 1 * s, sy = 1 * s; /* white pill sprite origin */
         int half = 15 * s;           /* half of the 30×30 sprite */
@@ -3397,23 +3415,11 @@ void cat_draw_rounded_rect(int x, int y, int w, int h, int r, ap_color c) {
         SDL_SetTextureColorMod(cat__g.status_assets, c.r, c.g, c.b);
         SDL_SetTextureAlphaMod(cat__g.status_assets, c.a);
 
-        /* Four corner sprites (quarter-circles) */
-        SDL_Rect tl_src = { sx,        sy,        half, half };
-        SDL_Rect tr_src = { sx + half, sy,        half, half };
-        SDL_Rect bl_src = { sx,        sy + half, half, half };
-        SDL_Rect br_src = { sx + half, sy + half, half, half };
+        if (round_tl) { SDL_Rect s0 = { sx,        sy,        half, half }, d0 = { x,         y,         r, r }; SDL_RenderCopy(rend, cat__g.status_assets, &s0, &d0); }
+        if (round_tr) { SDL_Rect s0 = { sx + half, sy,        half, half }, d0 = { x + w - r, y,         r, r }; SDL_RenderCopy(rend, cat__g.status_assets, &s0, &d0); }
+        if (round_bl) { SDL_Rect s0 = { sx,        sy + half, half, half }, d0 = { x,         y + h - r, r, r }; SDL_RenderCopy(rend, cat__g.status_assets, &s0, &d0); }
+        if (round_br) { SDL_Rect s0 = { sx + half, sy + half, half, half }, d0 = { x + w - r, y + h - r, r, r }; SDL_RenderCopy(rend, cat__g.status_assets, &s0, &d0); }
 
-        SDL_Rect tl_dst = { x,         y,         r, r };
-        SDL_Rect tr_dst = { x + w - r, y,         r, r };
-        SDL_Rect bl_dst = { x,         y + h - r, r, r };
-        SDL_Rect br_dst = { x + w - r, y + h - r, r, r };
-
-        SDL_RenderCopy(rend, cat__g.status_assets, &tl_src, &tl_dst);
-        SDL_RenderCopy(rend, cat__g.status_assets, &tr_src, &tr_dst);
-        SDL_RenderCopy(rend, cat__g.status_assets, &bl_src, &bl_dst);
-        SDL_RenderCopy(rend, cat__g.status_assets, &br_src, &br_dst);
-
-        /* Fill body rectangles (cross pattern between corners) */
         SDL_SetRenderDrawColor(rend, c.r, c.g, c.b, c.a);
         SDL_Rect top_bar = { x + r, y,         w - 2 * r, r };
         SDL_Rect mid_bar = { x,     y + r,     w,         h - 2 * r };
@@ -3421,29 +3427,31 @@ void cat_draw_rounded_rect(int x, int y, int w, int h, int r, ap_color c) {
         SDL_RenderFillRect(rend, &top_bar);
         SDL_RenderFillRect(rend, &mid_bar);
         SDL_RenderFillRect(rend, &bot_bar);
+        /* Square corners: fill the r×r corner box the sprite would have rounded. */
+        if (!round_tl) { SDL_Rect q = { x,         y,         r, r }; SDL_RenderFillRect(rend, &q); }
+        if (!round_tr) { SDL_Rect q = { x + w - r, y,         r, r }; SDL_RenderFillRect(rend, &q); }
+        if (!round_bl) { SDL_Rect q = { x,         y + h - r, r, r }; SDL_RenderFillRect(rend, &q); }
+        if (!round_br) { SDL_Rect q = { x + w - r, y + h - r, r, r }; SDL_RenderFillRect(rend, &q); }
         return;
     }
 
-    /* Desktop / fallback: procedural anti-aliased corners */
+    /* Desktop / fallback: procedural anti-aliased corners (square where unmasked). */
     SDL_SetRenderDrawColor(rend, c.r, c.g, c.b, c.a);
-
-    /* Center rectangle (between top/bottom arcs) */
     SDL_Rect center = {x, y + r, w, h - 2 * r};
     SDL_RenderFillRect(rend, &center);
-
-    /* Top bar between corners */
     SDL_Rect top = {x + r, y, w - 2 * r, r};
     SDL_RenderFillRect(rend, &top);
-
-    /* Bottom bar between corners */
     SDL_Rect bot = {x + r, y + h - r, w - 2 * r, r};
     SDL_RenderFillRect(rend, &bot);
 
-    /* Four corner arcs */
-    cat__fill_circle_quadrant(x + r - 1,     y + r - 1,     r, 0);
-    cat__fill_circle_quadrant(x + w - r,     y + r - 1,     r, 1);
-    cat__fill_circle_quadrant(x + r - 1,     y + h - r,     r, 2);
-    cat__fill_circle_quadrant(x + w - r,     y + h - r,     r, 3);
+    if (round_tl) cat__fill_circle_quadrant(x + r - 1, y + r - 1, r, 0); else { SDL_Rect q = { x,         y,         r, r }; SDL_RenderFillRect(rend, &q); }
+    if (round_tr) cat__fill_circle_quadrant(x + w - r, y + r - 1, r, 1); else { SDL_Rect q = { x + w - r, y,         r, r }; SDL_RenderFillRect(rend, &q); }
+    if (round_bl) cat__fill_circle_quadrant(x + r - 1, y + h - r, r, 2); else { SDL_Rect q = { x,         y + h - r, r, r }; SDL_RenderFillRect(rend, &q); }
+    if (round_br) cat__fill_circle_quadrant(x + w - r, y + h - r, r, 3); else { SDL_Rect q = { x + w - r, y + h - r, r, r }; SDL_RenderFillRect(rend, &q); }
+}
+
+void cat_draw_rounded_rect(int x, int y, int w, int h, int r, ap_color c) {
+    cat_draw_rounded_rect_ex(x, y, w, h, r, CAT_CORNER_ALL, c);
 }
 
 void cat_draw_pill(int x, int y, int w, int h, ap_color c) {
@@ -3454,6 +3462,17 @@ void cat_draw_pill(int x, int y, int w, int h, ap_color c) {
     float ratio = cat__g.theme.pill_radius_ratio;
     if (ratio <= 0.0f) {
         cat_draw_rect(x, y, w, h, c);
+        return;
+    }
+    /* Asymmetric corners (e.g. the "Leaf" list style): round only the masked
+       corners. 0 means unset → treat as all four (the default pill). */
+    int corner_mask = cat__g.theme.pill_corner_mask;
+    if (corner_mask != 0 && corner_mask != CAT_CORNER_ALL) {
+        int r = (int)(ratio * (h * 0.5f) + 0.5f);
+        if (r < 1) { cat_draw_rect(x, y, w, h, c); return; }
+        int max_r = (w < h ? w : h) / 2;
+        if (r > max_r) r = max_r;
+        cat_draw_rounded_rect_ex(x, y, w, h, r, (unsigned)corner_mask, c);
         return;
     }
     if (ratio >= 1.0f && cat__g.status_assets) {
