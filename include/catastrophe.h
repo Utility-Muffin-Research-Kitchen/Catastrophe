@@ -596,6 +596,8 @@ typedef struct {
     bool         show_battery;  /* Show battery icon from device or desktop preview state */
     bool         show_battery_level; /* Show numeric "85%" next to the battery icon */
     bool         show_wifi;     /* Show wifi icon from device or desktop preview state */
+    bool         show_volume;   /* Show speaker icon; volume_percent must be supplied by the caller */
+    int          volume_percent;/* 0-100 current volume, or -1 if unknown (icon hidden) */
     bool         no_ampm;       /* For 12-hour mode: skip AM/PM suffix */
     bool         no_pill;       /* Draw icons/text inline without pill background */
     bool         use_y;         /* If true, use y_position instead of default padding */
@@ -5086,6 +5088,7 @@ static void cat__blit_status_icon(int src_x, int src_y, int src_w, int src_h,
 #define CAT__BATTERY_W  17
 #define CAT__BATTERY_H  10
 #define CAT__WIFI_SIZE  12
+#define CAT__VOLUME_SIZE 12
 
 /* Helper: icon pixel size using the loaded spritesheet scale (1:1, no GPU upscaling) */
 #define CAT__ICON_PX(logical) ((logical) * cat__g.status_asset_scale)
@@ -5093,6 +5096,7 @@ static void cat__blit_status_icon(int src_x, int src_y, int src_w, int src_h,
 typedef struct {
     bool use_sprite_layout;
     bool wifi_visible;
+    bool volume_visible;
     bool battery_visible;
     bool battery_level_visible;   /* numeric "85%" next to the battery icon */
     bool clock_visible;
@@ -5119,6 +5123,10 @@ static inline cat__status_bar_layout cat__resolve_status_bar_layout(const cat_st
         layout.wifi_visible  = (layout.wifi_strength > 0);
     }
 
+    /* Volume can't be read here (it lives in the platform daemon); the caller
+       supplies volume_percent and we render the matching speaker sprite. */
+    layout.volume_visible = opts->show_volume && opts->volume_percent >= 0;
+
     if (opts->show_clock == CAT_CLOCK_SHOW) {
         layout.clock_visible = true;
     } else if (opts->show_clock == CAT_CLOCK_AUTO) {
@@ -5129,6 +5137,7 @@ static inline cat__status_bar_layout cat__resolve_status_bar_layout(const cat_st
     }
 
     if (layout.wifi_visible)    layout.visible_icon_count++;
+    if (layout.volume_visible)  layout.visible_icon_count++;
     if (layout.battery_visible) layout.visible_icon_count++;
 
     /* The numeric battery text counts as extra content, so a battery-only bar
@@ -5184,6 +5193,13 @@ static int cat__measure_status_bar_width(const cat_status_bar_opts *opts, TTF_Fo
         has_any = true;
     }
 
+    if (layout->volume_visible) {
+        int volume_w = layout->use_sprite_layout ? (CAT__VOLUME_SIZE * s)
+                                                 : (font ? cat_measure_text(font, "VOL") : CAT__VOLUME_SIZE * s);
+        total_w += volume_w + margin;
+        has_any = true;
+    }
+
     if (layout->battery_visible || layout->battery_level_visible) {
         bool drew = false;
         if (layout->battery_visible) {
@@ -5232,6 +5248,22 @@ static void cat__draw_status_bar_wifi_sprite(int x, int y, int wifi_strength) {
     }
 
     cat__blit_status_icon(sx, 104, CAT__WIFI_SIZE, CAT__WIFI_SIZE,
+                         x, y, iw, ih, cat__g.theme.hint);
+}
+
+/* Speaker sprite, chosen by volume level: mute (<=0), low (1-50), high (51-100).
+   Like wifi, the dimmer arcs are baked into the atlas as gray and the theme.hint
+   colormod preserves the brightness ratio. */
+static void cat__draw_status_bar_volume_sprite(int x, int y, int volume_percent) {
+    int s = cat__g.device_scale ? cat__g.device_scale : 2;
+    int iw = CAT__VOLUME_SIZE * s;
+    int ih = CAT__VOLUME_SIZE * s;
+    int sx;
+    if (volume_percent <= 0)        sx = 77;  /* mute slash */
+    else if (volume_percent <= 50)  sx = 64;  /* low: inner arc bright */
+    else                            sx = 51;  /* high: both arcs bright */
+
+    cat__blit_status_icon(sx, 88, CAT__VOLUME_SIZE, CAT__VOLUME_SIZE,
                          x, y, iw, ih, cat__g.theme.hint);
 }
 
@@ -5343,11 +5375,17 @@ void cat_draw_status_bar(cat_status_bar_opts *opts) {
             int wx = pill_x + (pill_h - iw) / 2;
             int wy = pill_y + (pill_h - ih) / 2;
             cat__draw_status_bar_wifi_sprite(wx, wy, layout.wifi_strength);
+        } else if (layout.volume_visible) {
+            int iw = CAT__VOLUME_SIZE * s;
+            int ih = CAT__VOLUME_SIZE * s;
+            int vx = pill_x + (pill_h - iw) / 2;
+            int vy = pill_y + (pill_h - ih) / 2;
+            cat__draw_status_bar_volume_sprite(vx, vy, opts->volume_percent);
         }
         return;
     }
 
-    /* Multi-element mode: render left-to-right (wifi → battery → clock) */
+    /* Multi-element mode: render left-to-right (wifi → volume → battery → clock) */
     int cx = pill_x + margin;
     int cy = pill_y;
 
@@ -5363,6 +5401,22 @@ void cat_draw_status_bar(cat_status_bar_opts *opts) {
         } else {
             int text_w = cat_measure_text(font, "WiFi");
             cat_draw_text(font, "WiFi", cx, cy + (pill_h - TTF_FontHeight(font)) / 2, cat__g.theme.hint);
+            cx += text_w + margin;
+        }
+    }
+
+    /* Volume icon */
+    if (layout.volume_visible) {
+        int iw = CAT__VOLUME_SIZE * s;
+        int ih = CAT__VOLUME_SIZE * s;
+        int iy = cy + (pill_h - ih) / 2;
+
+        if (cat__g.status_assets) {
+            cat__draw_status_bar_volume_sprite(cx, iy, opts->volume_percent);
+            cx += iw + margin;
+        } else {
+            int text_w = cat_measure_text(font, "VOL");
+            cat_draw_text(font, "VOL", cx, cy + (pill_h - TTF_FontHeight(font)) / 2, cat__g.theme.hint);
             cx += text_w + margin;
         }
     }

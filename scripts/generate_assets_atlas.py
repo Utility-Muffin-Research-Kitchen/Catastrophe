@@ -56,6 +56,9 @@ ASSET_MANIFEST: tuple[Asset, ...] = (
     Asset("ASSET_COLORTEMP", (41, 85, 9, 19), "Tabler temperature"),
     Asset("ASSET_VOLUME_MUTE", (21, 85, 10, 19), "Tabler volume"),
     Asset("ASSET_VOLUME", (21, 85, 19, 19), "Tabler volume-2"),
+    Asset("ASSET_VOLUME_STATUS_HIGH", (51, 88, 12, 12), "status speaker, both wave arcs bright"),
+    Asset("ASSET_VOLUME_STATUS_LOW", (64, 88, 12, 12), "status speaker, inner wave bright / outer dim"),
+    Asset("ASSET_VOLUME_STATUS_MUTE", (77, 88, 12, 12), "status speaker, mute slash"),
     Asset("ASSET_BATTERY", (47, 51, 17, 10), "Tabler battery, fitted to NextUI geometry"),
     Asset("ASSET_BATTERY_LOW", (66, 51, 17, 10), "Tabler battery, low/red"),
     Asset("ASSET_BATTERY_FILL", (81, 33, 12, 6), "battery fill block"),
@@ -794,6 +797,29 @@ def draw_volume(c: Canvas, x: float, y: float, w: float, h: float, waves: bool) 
         c.arc(x + 5.8, y + 9.5, 7.6, 315, 45, 1.25, WHITE)
 
 
+def draw_volume_status(c: Canvas, x: float, y: float, active: int, off: bool = False) -> None:
+    """Status-bar speaker, fitted to a 12x12 cell at roughly the same visual height
+    as the wifi sprite. A speaker cone with two wave arcs to its right; arcs above
+    the active level dim to LIGHT_GRAY, exactly like draw_wifi. off=True draws a
+    mute slash across the whole icon (the conventional muted-speaker look)."""
+    # Speaker: body on the left, cone widening to the right (toward the waves).
+    c.polygon([
+        (x + 1.2, y + 4.0), (x + 3.0, y + 4.0), (x + 5.8, y + 1.2),
+        (x + 5.8, y + 10.8), (x + 3.0, y + 8.0), (x + 1.2, y + 8.0),
+    ], WHITE)
+    cx, cy = x + 5.2, y + 6.0
+    if off:
+        # Diagonal slash across the icon. Erase a wider channel first so the slash
+        # reads as a distinct line where it crosses the (white) speaker body.
+        c.erase_line(x + 1.5, y + 1.5, x + 10.5, y + 10.5, 2.6)
+        c.line(x + 1.5, y + 1.5, x + 10.5, y + 10.5, 1.2, WHITE)
+        return
+    inner = WHITE if active >= 1 else LIGHT_GRAY
+    outer = WHITE if active >= 2 else LIGHT_GRAY
+    c.arc(cx, cy, 2.9, 308, 52, 1.2, inner)
+    c.arc(cx, cy, 4.7, 311, 49, 1.2, outer)
+
+
 def render(canvas: Canvas) -> None:
     # Geometric primitives and color swatches.
     canvas.circle(16, 16, 15, WHITE)
@@ -831,6 +857,10 @@ def render(canvas: Canvas) -> None:
     draw_tabler(canvas, "sun", 1, 85, 19, 19)
     draw_volume(canvas, 21, 85, 19, 19, waves=True)
     draw_tabler(canvas, "temperature", 41, 85, 9, 19)
+    # Status-bar speaker states (level-dimmed wave arcs, like wifi).
+    draw_volume_status(canvas, 51, 88, active=2)
+    draw_volume_status(canvas, 64, 88, active=1)
+    draw_volume_status(canvas, 77, 88, active=0, off=True)
     draw_wifi(canvas, 1, 104, 12, 12, active=3)
     draw_wifi(canvas, 14, 104, 12, 12, active=2)
     draw_wifi(canvas, 27, 104, 12, 12, active=1)
