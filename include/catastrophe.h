@@ -852,6 +852,10 @@ void           cat_set_theme_color(const char *hex);
 /* Override the tab-bar text colors on the active stylesheet (inactive +
    selected). Lets the host map them onto its own palette roles. */
 void           cat_set_tab_text_colors(cat_color inactive, cat_color selected);
+/* Derive the theme fields that aren't stored directly: selected-row text
+   auto-contrasts against the selection pill, and the tab-bar text colors track
+   the palette. Call after changing any of the color roles. NULL is a no-op. */
+void           cat_finalize_theme_colors(ap_theme *t);
 
 /* ═══════════════════════════════════════════════════════════════════════════
  * Public API — Fonts
@@ -1163,6 +1167,32 @@ static const char *cat__env_nonempty(const char *name) {
     return (value && value[0]) ? value : NULL;
 }
 
+static bool cat__env_parse_int_range(const char *name, int min_v, int max_v, int *out) {
+    const char *value = cat__env_nonempty(name);
+    if (!value || !out) return false;
+
+    errno = 0;
+    char *end = NULL;
+    long parsed = strtol(value, &end, 10);
+    if (errno != 0 || end == value || (end && *end != '\0')) return false;
+    if (parsed < min_v || parsed > max_v) return false;
+    *out = (int)parsed;
+    return true;
+}
+
+static bool cat__env_parse_float_range(const char *name, float min_v, float max_v, float *out) {
+    const char *value = cat__env_nonempty(name);
+    if (!value || !out) return false;
+
+    errno = 0;
+    char *end = NULL;
+    float parsed = strtof(value, &end);
+    if (errno != 0 || end == value || (end && *end != '\0')) return false;
+    if (parsed < min_v || parsed > max_v) return false;
+    *out = parsed;
+    return true;
+}
+
 static const char *cat__default_sdcard_path(void) {
 #if defined(PLATFORM_MLP1)
     return CAT__MLP1_DEFAULT_SDCARD_PATH;
@@ -1451,6 +1481,48 @@ void cat_set_theme_color(const char *hex) {
 void cat_set_tab_text_colors(cat_color inactive, cat_color selected) {
     cat__g.stylesheet.ui.tab_color = inactive;
     cat__g.stylesheet.ui.tab_selected_color = selected;
+}
+
+void cat_finalize_theme_colors(ap_theme *t) {
+    if (!t) return;
+
+    int hl_lum = (t->highlight.r * 299 + t->highlight.g * 587 + t->highlight.b * 114) / 1000;
+    t->highlighted_text = (hl_lum > 140) ? t->background : t->text;
+
+    cat_set_tab_text_colors(
+        cat_color_rgba(t->hint.r, t->hint.g, t->hint.b, 0xFF),
+        cat_color_rgba(t->text.r, t->text.g, t->text.b, 0xFF));
+}
+
+static void cat__apply_env_appearance_overrides(void) {
+    ap_theme *t = &cat__g.theme;
+    const char *hex;
+    float radius = 0.0f;
+    int corner_mask = 0;
+    bool color_changed = false;
+
+    hex = cat__env_nonempty("CAT_COLOR_ACCENT");
+    if (hex) { t->accent = cat_hex_to_color(hex); color_changed = true; }
+    hex = cat__env_nonempty("CAT_COLOR_BACKGROUND");
+    if (hex) { t->background = cat_hex_to_color(hex); color_changed = true; }
+    hex = cat__env_nonempty("CAT_COLOR_TEXT");
+    if (hex) { t->text = cat_hex_to_color(hex); color_changed = true; }
+    hex = cat__env_nonempty("CAT_COLOR_HINT");
+    if (hex) { t->hint = cat_hex_to_color(hex); color_changed = true; }
+    hex = cat__env_nonempty("CAT_COLOR_HIGHLIGHT");
+    if (hex) { t->highlight = cat_hex_to_color(hex); color_changed = true; }
+    hex = cat__env_nonempty("CAT_COLOR_BUTTON_LABEL");
+    if (hex) { t->button_label = cat_hex_to_color(hex); color_changed = true; }
+    hex = cat__env_nonempty("CAT_COLOR_BUTTON_GLYPH_BG");
+    if (hex) { t->button_glyph_bg = cat_hex_to_color(hex); color_changed = true; }
+
+    if (cat__env_parse_float_range("CAT_PILL_RADIUS_RATIO", 0.0f, 1.0f, &radius))
+        t->pill_radius_ratio = radius;
+    if (cat__env_parse_int_range("CAT_PILL_CORNER_MASK", 0, CAT_CORNER_ALL, &corner_mask))
+        t->pill_corner_mask = corner_mask;
+
+    if (color_changed)
+        cat_finalize_theme_colors(t);
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -2374,6 +2446,8 @@ int cat_get_font_bump(void) {
 int cat_set_font_bump(int bump) {
     if (bump < 0) bump = 0;
     if (bump > CAT_FONT_BUMP_MAX) bump = CAT_FONT_BUMP_MAX;
+    if (cat__g.font_bump == bump && cat__g.fonts[CAT_FONT_SMALL])
+        return CAT_OK;
     cat__g.font_bump = bump;
     return cat__load_fonts(cat__g.theme.font_path[0] ? cat__g.theme.font_path : NULL);
 }
@@ -5742,6 +5816,11 @@ int cat_init(cat_config *cfg) {
         cat__g.font_bump = 0;
     else
         cat__g.font_bump = cat__compute_font_bump();
+    {
+        int env_bump = 0;
+        if (cat__env_parse_int_range("CAT_FONT_BUMP", 0, CAT_FONT_BUMP_MAX, &env_bump))
+            cat__g.font_bump = env_bump;
+    }
     cat_log("Font bump: %d", cat__g.font_bump);
 
     /* Create window. Start hidden when requested so a daemon can warm up the
@@ -5812,13 +5891,22 @@ int cat_init(cat_config *cfg) {
     }
     cat__g.last_present_ms = SDL_GetTicks();
 
-    /* Load last-used theme from state file, defaulting to "Catastrophe". */
+    /* Load requested/env theme first, then last-used theme from state file,
+       defaulting to "Catastrophe". */
     {
         char theme_name[256];
+        const char *env_theme = cat__env_nonempty("CAT_THEME_NAME");
         cat_theme_state_load(theme_name, sizeof(theme_name));
+        if (env_theme)
+            snprintf(theme_name, sizeof(theme_name), "%s", env_theme);
         cat_stylesheet ss;
         if (cat_stylesheet_load_theme(&ss, theme_name) != CAT_OK) {
-            cat_stylesheet_init_default(&ss);
+            if (env_theme) {
+                cat_log("Warning: CAT_THEME_NAME not found: %s", env_theme);
+                cat_theme_state_load(theme_name, sizeof(theme_name));
+            }
+            if (cat_stylesheet_load_theme(&ss, theme_name) != CAT_OK)
+                cat_stylesheet_init_default(&ss);
         }
         cat_stylesheet_apply(&ss);
     }
@@ -5827,9 +5915,11 @@ int cat_init(cat_config *cfg) {
     if (cfg && cfg->primary_color_hex) {
         cat_set_theme_color(cfg->primary_color_hex);
     }
+    cat__apply_env_appearance_overrides();
 
-    /* Load fonts. Priority: cfg override > theme's ui_font.path > platform fallback. */
-    const char *font_path = (cfg && cfg->font_path) ? cfg->font_path : NULL;
+    /* Load fonts. Priority: env override > cfg override > theme's ui_font.path > fallback. */
+    const char *font_path = cat__env_nonempty("CAT_FONT_PATH");
+    if (!font_path && cfg && cfg->font_path) font_path = cfg->font_path;
     if (!font_path && cat__g.theme.font_path[0]) font_path = cat__g.theme.font_path;
     if (cat__load_fonts(font_path) != CAT_OK) {
         cat__set_error("Failed to load fonts");
