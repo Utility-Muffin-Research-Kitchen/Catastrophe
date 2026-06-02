@@ -594,6 +594,7 @@ typedef struct {
     int          show_clock;    /* CAT_CLOCK_AUTO/SHOW/HIDE (default: CAT_CLOCK_AUTO) */
     bool         use_24h;       /* 24-hour clock if true; 12-hour if false */
     bool         show_battery;  /* Show battery icon from device or desktop preview state */
+    bool         show_battery_level; /* Show numeric "85%" next to the battery icon */
     bool         show_wifi;     /* Show wifi icon from device or desktop preview state */
     bool         no_ampm;       /* For 12-hour mode: skip AM/PM suffix */
     bool         no_pill;       /* Draw icons/text inline without pill background */
@@ -5093,6 +5094,7 @@ typedef struct {
     bool use_sprite_layout;
     bool wifi_visible;
     bool battery_visible;
+    bool battery_level_visible;   /* numeric "85%" next to the battery icon */
     bool clock_visible;
     bool clock_24h;
     bool clock_no_ampm;
@@ -5106,10 +5108,11 @@ static inline cat__status_bar_layout cat__resolve_status_bar_layout(const cat_st
     cat__status_bar_layout layout = {0};
     if (!opts) return layout;
 
-    layout.use_sprite_layout = (cat__g.status_assets != NULL);
-    layout.battery_visible   = opts->show_battery;
-    layout.clock_24h         = opts->use_24h;
-    layout.clock_no_ampm     = opts->no_ampm;
+    layout.use_sprite_layout    = (cat__g.status_assets != NULL);
+    layout.battery_visible      = opts->show_battery;
+    layout.battery_level_visible = opts->show_battery && opts->show_battery_level;
+    layout.clock_24h            = opts->use_24h;
+    layout.clock_no_ampm        = opts->no_ampm;
 
     if (opts->show_wifi) {
         layout.wifi_strength = cat__get_wifi_strength();
@@ -5128,10 +5131,24 @@ static inline cat__status_bar_layout cat__resolve_status_bar_layout(const cat_st
     if (layout.wifi_visible)    layout.visible_icon_count++;
     if (layout.battery_visible) layout.visible_icon_count++;
 
+    /* The numeric battery text counts as extra content, so a battery-only bar
+       with the percentage on no longer qualifies for the centered single-icon
+       pill — it falls through to the left-to-right multi-element layout. */
     layout.single_icon_sprite_mode =
-        layout.use_sprite_layout && !layout.clock_visible && layout.visible_icon_count == 1;
+        layout.use_sprite_layout && !layout.clock_visible &&
+        layout.visible_icon_count == 1 && !layout.battery_level_visible;
 
     return layout;
+}
+
+/* Format the battery percentage for the status bar (e.g. "85%"). Returns the
+   percent (>=0), or -1 when unknown — in which case buf is emptied and the
+   caller should draw the icon alone. */
+static int cat__battery_level_text(char *buf, size_t n) {
+    int bat = cat__get_battery_percent();
+    if (bat < 0) { if (n) buf[0] = '\0'; return -1; }
+    snprintf(buf, n, "%d%%", bat);
+    return bat;
 }
 
 /* Format the status-bar clock. 24-hour keeps its leading zero (e.g. 09:05);
@@ -5170,7 +5187,14 @@ static int cat__measure_status_bar_width(const cat_status_bar_opts *opts, TTF_Fo
     if (layout->battery_visible) {
         int battery_w = layout->use_sprite_layout ? (CAT__BATTERY_W * s)
                                                   : (font ? cat_measure_text(font, "BAT") : CAT__BATTERY_W * s);
-        total_w += battery_w + margin;
+        total_w += battery_w;
+        /* Reserve the widest string ("100%") so the pill doesn't resize as the
+           digit count changes. A tight gap groups the number with its icon. */
+        if (layout->battery_level_visible && font) {
+            int level_gap = (margin > 1) ? margin / 2 : 1;
+            total_w += level_gap + cat_measure_text(font, "100%");
+        }
+        total_w += margin;
         has_any = true;
     }
 
@@ -5335,22 +5359,31 @@ void cat_draw_status_bar(cat_status_bar_opts *opts) {
         }
     }
 
-    /* Battery icon */
+    /* Battery icon (+ optional "85%" to its right) */
     if (opts->show_battery) {
         int iw = CAT__BATTERY_W * s;
         int ih = CAT__BATTERY_H * s;
         int iy = cy + (pill_h - ih) / 2;
+        int ty = cy + (pill_h - TTF_FontHeight(font)) / 2;
 
         if (cat__g.status_assets) {
             cat__draw_status_bar_battery_sprite(cx, iy, font);
+            cx += iw;
         } else {
-            int text_w = cat_measure_text(font, "BAT");
-            cat_draw_text(font, "BAT", cx, cy + (pill_h - TTF_FontHeight(font)) / 2, cat__g.theme.hint);
-            cx += text_w + margin;
+            cat_draw_text(font, "BAT", cx, ty, cat__g.theme.hint);
+            cx += cat_measure_text(font, "BAT");
         }
-        if (cat__g.status_assets) {
-            cx += iw + margin;
+
+        if (layout.battery_level_visible) {
+            char level_text[8];
+            if (cat__battery_level_text(level_text, sizeof(level_text)) >= 0) {
+                int level_gap = (margin > 1) ? margin / 2 : 1;
+                cx += level_gap;
+                cat_draw_text(font, level_text, cx, ty, cat__g.theme.hint);
+                cx += cat_measure_text(font, "100%");   /* reserved width keeps the pill stable */
+            }
         }
+        cx += margin;
     }
 
     /* Clock (rightmost) */
