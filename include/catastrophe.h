@@ -935,6 +935,11 @@ int            cat_draw_text_wrapped(TTF_Font *font, const char *text, int x, in
 int            cat_measure_text(TTF_Font *font, const char *text);
 int            cat_measure_text_ellipsized(TTF_Font *font, const char *text, int max_w); /* measure width text would occupy when ellipsized to fit max_w */
 void           cat_draw_image(SDL_Texture *tex, int x, int y, int w, int h);
+/* Draw an image clipped to a rounded rectangle, rounding only the corners in the
+   CAT_CORNER_* mask (so it can match a list pill's shape). Uses a scratch render
+   target to multiply the image's alpha by the rounded mask; falls back to a plain
+   cat_draw_image when r<=0, corners==0, or no render target is available. */
+void           cat_draw_image_rounded_ex(SDL_Texture *tex, int x, int y, int w, int h, int r, unsigned corners);
 SDL_Texture   *cat_load_image(const char *path);
 void           cat_draw_scrollbar(int x, int y, int h, int visible, int total, int offset);
 /* Draw a horizontal tab bar spanning the full screen width. Uses the theme's
@@ -4092,6 +4097,83 @@ void cat_draw_image(SDL_Texture *tex, int x, int y, int w, int h) {
     if (!tex) return;
     SDL_Rect dst = {x, y, w, h};
     SDL_RenderCopy(cat__g.renderer, tex, NULL, &dst);
+}
+
+void cat_draw_image_rounded_ex(SDL_Texture *tex, int x, int y, int w, int h,
+                               int r, unsigned corners) {
+    SDL_Renderer *rend = cat__g.renderer;
+    if (!tex || w <= 0 || h <= 0 || !rend) return;
+    if (r <= 0 || corners == 0) { cat_draw_image(tex, x, y, w, h); return; }
+
+    /* The mask multiplies the image's alpha by a white rounded-rect: dst.a =
+       src.a*dst.a, leaving RGB untouched. This needs a custom blend mode. Some
+       renderers reject it — and without the alpha multiply the "white" mask would
+       paint a solid white rectangle over the art. So probe once, and if custom
+       blend is unsupported fall back to a plain (square) draw — never white,
+       transparency preserved. */
+    SDL_BlendMode mask_blend = SDL_ComposeCustomBlendMode(
+        SDL_BLENDFACTOR_ZERO, SDL_BLENDFACTOR_ONE,        SDL_BLENDOPERATION_ADD,
+        SDL_BLENDFACTOR_ZERO, SDL_BLENDFACTOR_SRC_ALPHA,  SDL_BLENDOPERATION_ADD);
+    static int custom_blend_ok = -1;
+    if (custom_blend_ok < 0) {
+        SDL_BlendMode probe_prev;
+        SDL_GetRenderDrawBlendMode(rend, &probe_prev);
+        custom_blend_ok = (SDL_SetRenderDrawBlendMode(rend, mask_blend) == 0) ? 1 : 0;
+        SDL_SetRenderDrawBlendMode(rend, probe_prev);
+    }
+    if (!custom_blend_ok) { cat_draw_image(tex, x, y, w, h); return; }
+
+    /* Scratch render target, grown to the largest box we've been asked to draw. */
+    static SDL_Texture *scratch = NULL;
+    static int scratch_w = 0, scratch_h = 0;
+    if (!scratch || scratch_w < w || scratch_h < h) {
+        if (scratch) SDL_DestroyTexture(scratch);
+        if (w > scratch_w) scratch_w = w;
+        if (h > scratch_h) scratch_h = h;
+        scratch = SDL_CreateTexture(rend, SDL_PIXELFORMAT_RGBA8888,
+                                    SDL_TEXTUREACCESS_TARGET, scratch_w, scratch_h);
+        if (!scratch) { scratch_w = scratch_h = 0; cat_draw_image(tex, x, y, w, h); return; }
+        SDL_SetTextureBlendMode(scratch, SDL_BLENDMODE_BLEND);
+    }
+
+    SDL_Texture *prev_target = SDL_GetRenderTarget(rend);
+    SDL_SetRenderTarget(rend, scratch);
+
+    /* Clear the target fully transparent. RenderClear writes the alpha channel
+       reliably (a plain NONE-blended fill can leave the target opaque on GLES). */
+    SDL_SetRenderDrawColor(rend, 0, 0, 0, 0);
+    SDL_RenderClear(rend);
+    SDL_Rect region = { 0, 0, w, h };
+
+    /* Copy the image in over the transparent target with normal alpha blending,
+       so the image's own transparent pixels stay transparent (copying with
+       BLENDMODE_NONE forces the alpha opaque on this renderer → white). */
+    SDL_BlendMode tex_bm;
+    SDL_GetTextureBlendMode(tex, &tex_bm);
+    SDL_SetTextureBlendMode(tex, SDL_BLENDMODE_BLEND);
+    SDL_RenderCopy(rend, tex, NULL, &region);
+    SDL_SetTextureBlendMode(tex, tex_bm);
+
+    /* Multiply the region's alpha by the white rounded-rect mask (see above):
+       inside the shape alpha is kept, outside the rounded corners it is zeroed,
+       with AA at the arc edges. The mask's white RGB is ignored (color = dst). */
+    SDL_BlendMode saved_draw_bm;
+    SDL_GetRenderDrawBlendMode(rend, &saved_draw_bm);
+    SDL_BlendMode saved_assets_bm = SDL_BLENDMODE_BLEND;
+    if (cat__g.status_assets) SDL_GetTextureBlendMode(cat__g.status_assets, &saved_assets_bm);
+    SDL_SetRenderDrawBlendMode(rend, mask_blend);
+    if (cat__g.status_assets) SDL_SetTextureBlendMode(cat__g.status_assets, mask_blend);
+
+    ap_color white = { 255, 255, 255, 255 };
+    cat_draw_rounded_rect_ex(0, 0, w, h, r, corners, white);
+
+    SDL_SetRenderDrawBlendMode(rend, saved_draw_bm);
+    if (cat__g.status_assets) SDL_SetTextureBlendMode(cat__g.status_assets, saved_assets_bm);
+
+    /* Back to the real target; blit the masked image where it belongs. */
+    SDL_SetRenderTarget(rend, prev_target);
+    SDL_Rect out = { x, y, w, h };
+    SDL_RenderCopy(rend, scratch, &region, &out);
 }
 
 SDL_Texture *cat_load_image(const char *path) {
