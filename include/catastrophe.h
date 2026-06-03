@@ -955,6 +955,33 @@ void           cat_draw_textured_parallelogram(SDL_Texture *tex,
                                                uint8_t alpha);
 void           cat_draw_progress_bar(int x, int y, int w, int h, float progress, ap_color fg, ap_color bg);
 SDL_Rect       cat_get_content_rect(bool has_title, bool has_footer, bool has_status_bar);
+
+/* ─── Box model ─────────────────────────────────────────────────────────────
+ * A minimal, margin-free layout box: a rectangle plus per-side INTERNAL padding.
+ * Boxes tile their parent with no gaps; all visible spacing comes from a box's
+ * own padding (never an outside margin). Build a layout by carving fixed-height
+ * strips off a box and splitting the remainder into columns. Pure geometry — no
+ * drawing, no global state. All sizes are final pixels (callers pre-scale with
+ * CAT_S/CAT_DS). See plans/BOX_MODEL.md. */
+typedef struct {
+    int x, y, w, h;                   /* the box in pixels                     */
+    int pad_t, pad_r, pad_b, pad_l;   /* internal padding (inset for contents) */
+} cat_box;
+
+/* The drawable area inside the padding (clamped to >= 0). */
+SDL_Rect cat_box_content(const cat_box *b);
+/* Carve `height` px off the top of b's content area: returns that strip as a box
+ * (pad 0), and consumes it from b (b's content top moves down). height <= 0 is a
+ * no-op that returns an empty strip — so an absent sub-header / hidden hint bar
+ * costs nothing. cat_box_carve_bottom is the same from the bottom edge. */
+cat_box  cat_box_carve_top(cat_box *b, int height);
+cat_box  cat_box_carve_bottom(cat_box *b, int height);
+/* Split b's content into a left column of width `left_w` and a right column that
+ * fills the rest, with `gutter` px between them realized as facing-edge padding
+ * (left gets pad_r += gutter/2, right gets pad_l += gutter/2) — no sibling
+ * margin. Either out pointer may be NULL. */
+void     cat_box_split_cols(const cat_box *b, int left_w, int gutter,
+                            cat_box *left, cat_box *right);
 void           cat_draw_screen_title(const char *title, cat_status_bar_opts *status_bar);
 void           cat_draw_screen_title_centered(const char *title, cat_status_bar_opts *status_bar);
 int            cat_measure_wrapped_text_height(TTF_Font *font, const char *text, int max_w);
@@ -3964,6 +3991,57 @@ SDL_Rect cat_get_content_rect(bool has_title, bool has_footer, bool has_status_b
     if (rect.h < 0) rect.h = 0;
 
     return rect;
+}
+
+SDL_Rect cat_box_content(const cat_box *b) {
+    SDL_Rect r = { 0, 0, 0, 0 };
+    if (!b) return r;
+    r.x = b->x + b->pad_l;
+    r.y = b->y + b->pad_t;
+    r.w = b->w - b->pad_l - b->pad_r;
+    r.h = b->h - b->pad_t - b->pad_b;
+    if (r.w < 0) r.w = 0;
+    if (r.h < 0) r.h = 0;
+    return r;
+}
+
+cat_box cat_box_carve_top(cat_box *b, int height) {
+    cat_box strip = { 0, 0, 0, 0, 0, 0, 0, 0 };
+    if (!b) return strip;
+    SDL_Rect c = cat_box_content(b);
+    if (height < 0) height = 0;
+    if (height > c.h) height = c.h;
+    strip.x = c.x; strip.y = c.y; strip.w = c.w; strip.h = height;
+    b->pad_t += height;   /* consume the strip from the top of b's content */
+    return strip;
+}
+
+cat_box cat_box_carve_bottom(cat_box *b, int height) {
+    cat_box strip = { 0, 0, 0, 0, 0, 0, 0, 0 };
+    if (!b) return strip;
+    SDL_Rect c = cat_box_content(b);
+    if (height < 0) height = 0;
+    if (height > c.h) height = c.h;
+    strip.x = c.x; strip.y = c.y + c.h - height; strip.w = c.w; strip.h = height;
+    b->pad_b += height;
+    return strip;
+}
+
+void cat_box_split_cols(const cat_box *b, int left_w, int gutter,
+                        cat_box *left, cat_box *right) {
+    if (!b) return;
+    SDL_Rect c = cat_box_content(b);
+    if (left_w < 0) left_w = 0;
+    if (left_w > c.w) left_w = c.w;
+    int half = gutter / 2;
+    if (left) {
+        cat_box l = { c.x, c.y, left_w, c.h, 0, half, 0, 0 };
+        *left = l;
+    }
+    if (right) {
+        cat_box r = { c.x + left_w, c.y, c.w - left_w, c.h, 0, 0, 0, half };
+        *right = r;
+    }
 }
 
 static void cat__draw_screen_title_impl(const char *title, cat_status_bar_opts *status_bar, bool center) {
