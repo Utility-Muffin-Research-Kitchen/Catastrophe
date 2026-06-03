@@ -809,21 +809,24 @@ def draw_volume_status(c: Canvas, x: float, y: float, active: int, off: bool = F
         (x + 1.0, y + 4.0), (x + 2.6, y + 4.0), (x + 5.0, y + 1.2),
         (x + 5.0, y + 10.8), (x + 2.6, y + 8.0), (x + 1.0, y + 8.0),
     ], WHITE)
-    cx, cy = x + 4.4, y + 6.0
+    cx, cy = x + 3.9, y + 6.0
     if off:
-        # Diagonal slash across the icon. Erase a wider channel first so the slash
-        # reads as a distinct line where it crosses the (white) speaker body.
-        c.erase_line(x + 1.5, y + 1.5, x + 10.5, y + 10.5, 2.6)
-        c.line(x + 1.5, y + 1.5, x + 10.5, y + 10.5, 1.2, WHITE)
+        # Diagonal slash across the icon (top-left -> bottom-right). Erase a wider
+        # channel first so the slash reads as a distinct line where it crosses the
+        # (white) speaker body.
+        c.erase_line(x + 1.5, y + 1.5, x + 10.5, y + 10.5, 2.8)
+        c.line(x + 1.5, y + 1.5, x + 10.5, y + 10.5, 1.4, WHITE)
         return
     cols = (
         WHITE if active >= 1 else LIGHT_GRAY,
         WHITE if active >= 2 else LIGHT_GRAY,
         WHITE if active >= 3 else LIGHT_GRAY,
     )
-    c.arc(cx, cy, 2.3, 308, 52, 1.1, cols[0])
-    c.arc(cx, cy, 3.8, 310, 50, 1.1, cols[1])
-    c.arc(cx, cy, 5.3, 312, 48, 1.1, cols[2])
+    # Thicker arcs, wide radial spacing (gap ~2.5) so the levels read as clearly
+    # separate waves.
+    c.arc(cx, cy, 2.3, 308, 52, 1.5, cols[0])
+    c.arc(cx, cy, 4.8, 308, 52, 1.5, cols[1])
+    c.arc(cx, cy, 7.3, 314, 46, 1.5, cols[2])
 
 
 def render(canvas: Canvas) -> None:
