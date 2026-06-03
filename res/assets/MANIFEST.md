@@ -20,9 +20,10 @@
 | `ASSET_COLORTEMP` | `41,85,9,19` | Tabler temperature |
 | `ASSET_VOLUME_MUTE` | `21,85,10,19` | Tabler volume |
 | `ASSET_VOLUME` | `21,85,19,19` | Tabler volume-2 |
-| `ASSET_VOLUME_STATUS_HIGH` | `51,88,12,12` | status speaker, both wave arcs bright |
-| `ASSET_VOLUME_STATUS_LOW` | `64,88,12,12` | status speaker, inner wave bright / outer dim |
-| `ASSET_VOLUME_STATUS_MUTE` | `77,88,12,12` | status speaker, mute slash |
+| `ASSET_VOLUME_STATUS_HIGH` | `51,88,12,12` | status speaker, 3 wave arcs bright |
+| `ASSET_VOLUME_STATUS_MED` | `64,88,12,12` | status speaker, inner+mid bright / outer dim |
+| `ASSET_VOLUME_STATUS_LOW` | `77,88,12,12` | status speaker, inner bright / mid+outer dim |
+| `ASSET_VOLUME_STATUS_MUTE` | `90,88,12,12` | status speaker, mute slash |
 | `ASSET_BATTERY` | `47,51,17,10` | Tabler battery, fitted to NextUI geometry |
 | `ASSET_BATTERY_LOW` | `66,51,17,10` | Tabler battery, low/red |
 | `ASSET_BATTERY_FILL` | `81,33,12,6` | battery fill block |

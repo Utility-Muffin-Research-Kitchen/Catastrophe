@@ -5259,9 +5259,10 @@ static void cat__draw_status_bar_volume_sprite(int x, int y, int volume_percent)
     int iw = CAT__VOLUME_SIZE * s;
     int ih = CAT__VOLUME_SIZE * s;
     int sx;
-    if (volume_percent <= 0)        sx = 77;  /* mute slash */
-    else if (volume_percent <= 50)  sx = 64;  /* low: inner arc bright */
-    else                            sx = 51;  /* high: both arcs bright */
+    if (volume_percent <= 0)        sx = 90;  /* mute slash */
+    else if (volume_percent <= 33)  sx = 77;  /* low: 1 arc bright */
+    else if (volume_percent <= 66)  sx = 64;  /* med: 2 arcs bright */
+    else                            sx = 51;  /* high: 3 arcs bright */
 
     cat__blit_status_icon(sx, 88, CAT__VOLUME_SIZE, CAT__VOLUME_SIZE,
                          x, y, iw, ih, cat__g.theme.hint);
