@@ -5361,10 +5361,16 @@ static void cat__draw_status_bar_battery_sprite(int x, int y, TTF_Font *font) {
     ap_color low_red      = { 0xFF, 0x3B, 0x30, 0xFF };
 
     if (charging) {
-        /* Animated rising green fill — reads as "charging". Self-drives the next
-           frame so it keeps animating without the app polling. */
         cat__blit_status_icon(47, 51, CAT__BATTERY_W, CAT__BATTERY_H,
                              x, y, iw, ih, cat__g.theme.hint);
+        if (bat >= 100) {
+            /* Fully charged: solid green, static — the sweep would imply it's
+               still filling, so stop animating once it tops off. */
+            cat_draw_rect(cav_x, cav_y, cav_w, cav_h, charge_green);
+            return;
+        }
+        /* Animated rising green fill — reads as "charging". Self-drives the next
+           frame so it keeps animating without the app polling. */
         uint32_t period = 3000u;                   /* ~3s per fill sweep */
         uint32_t phase = SDL_GetTicks() % period;
         int level = (int)(phase * 100u / period);  /* 0..99, loops */
