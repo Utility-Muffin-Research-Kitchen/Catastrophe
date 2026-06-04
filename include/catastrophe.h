@@ -596,6 +596,9 @@ typedef struct {
     bool         show_battery;  /* Show battery icon from device or desktop preview state */
     bool         show_battery_level; /* Show numeric "85%" next to the battery icon */
     bool         show_wifi;     /* Show wifi icon from device or desktop preview state */
+    bool         wifi_supplied; /* If true, use wifi_strength below (caller owns the radio read);
+                                   if false, Catastrophe self-reads via wpa_cli/iw (legacy/preview). */
+    int          wifi_strength; /* 0=none..3=strong, supplied by the caller when wifi_supplied */
     bool         show_volume;   /* Show speaker icon; volume_percent must be supplied by the caller */
     int          volume_percent;/* 0-100 current volume, or -1 if unknown (icon hidden) */
     bool         no_ampm;       /* For 12-hour mode: skip AM/PM suffix */
@@ -5283,7 +5286,11 @@ static inline cat__status_bar_layout cat__resolve_status_bar_layout(const cat_st
     layout.clock_no_ampm        = opts->no_ampm;
 
     if (opts->show_wifi) {
-        layout.wifi_strength = cat__get_wifi_strength();
+        /* Prefer the caller-supplied strength (an app that owns the radio read
+           keeps the icon and its own Wi-Fi UI on one source). Fall back to the
+           built-in reader only when no value is supplied (preview/legacy apps). */
+        layout.wifi_strength = opts->wifi_supplied ? opts->wifi_strength
+                                                   : cat__get_wifi_strength();
         layout.wifi_visible  = (layout.wifi_strength > 0);
     }
 
