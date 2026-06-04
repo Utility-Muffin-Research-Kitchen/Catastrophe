@@ -5205,10 +5205,14 @@ static int cat__get_wifi_strength(void) {
     fclose(f);
     if (strcmp(state, "up") != 0) { result = 0; goto cache; }
 
-    /* Read signal via iw first, then wpa_cli fallback */
-    int rssi = cat__read_wifi_rssi_iw();
+    /* Read signal via wpa_cli signal_poll first so the status-bar icon matches
+       the Network settings page (which reads the same source); fall back to iw
+       only on devices where wpa_cli is unavailable. (iw and signal_poll can
+       report RSSI that differs by enough to cross a strength bucket — e.g. iw
+       ~-65 → 2 bars vs signal_poll -80 → 1 bar — so they must share one source.) */
+    int rssi = cat__read_wifi_rssi_wpa_cli();
     if (rssi == unavailable) {
-        rssi = cat__read_wifi_rssi_wpa_cli();
+        rssi = cat__read_wifi_rssi_iw();
     }
 
     /* Keep icon visible when interface is up but RSSI source is unavailable */
