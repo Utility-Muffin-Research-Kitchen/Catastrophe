@@ -1044,6 +1044,15 @@ void           cat_show_footer_overflow(void);
 void           cat_draw_status_bar(cat_status_bar_opts *opts);
 int            cat_get_status_bar_height(void);
 int            cat_get_status_bar_width(cat_status_bar_opts *opts);
+/* Populate *out from the CAT_STATUS_* appearance-snapshot env vars (exported by
+   the launcher, or defaulted by env.sh). Returns true if a status bar should be
+   drawn — i.e. ANY of wifi, battery icon, battery level (number), or clock is
+   enabled. Leaves wifi_supplied=false so the bar self-reads wifi/battery/clock
+   live; volume is never shown (no live source in an app). When a var is unset,
+   defaults match the launcher (wifi + battery on, 24h clock). */
+bool           cat_status_bar_from_env(cat_status_bar_opts *out);
+/* CAT_SHOW_HINTS: whether footers/hints should be shown. Default true. */
+bool           cat_hints_enabled_from_env(void);
 
 /* ═══════════════════════════════════════════════════════════════════════════
  * Public API — Logging
@@ -1229,6 +1238,14 @@ static bool cat__env_parse_float_range(const char *name, float min_v, float max_
     if (parsed < min_v || parsed > max_v) return false;
     *out = parsed;
     return true;
+}
+
+/* Boolean snapshot flag: "0" is false, any other non-empty value is true,
+   unset falls back to dflt. Mirrors the launcher's `strcmp(val,"0")!=0` test. */
+static bool cat__env_flag(const char *name, bool dflt) {
+    const char *value = cat__env_nonempty(name);
+    if (!value) return dflt;
+    return strcmp(value, "0") != 0;
 }
 
 static const char *cat__default_sdcard_path(void) {
@@ -5517,6 +5534,48 @@ int cat_get_status_bar_width(cat_status_bar_opts *opts) {
     TTF_Font *font = cat_get_font(CAT_FONT_SMALL);
     cat__status_bar_layout layout = cat__resolve_status_bar_layout(opts);
     return cat__measure_status_bar_width(opts, font, &layout);
+}
+
+bool cat_status_bar_from_env(cat_status_bar_opts *out) {
+    if (!out) return false;
+    memset(out, 0, sizeof(*out));
+
+    /* Visibility toggles (default to launcher defaults when unset). */
+    out->show_wifi          = cat__env_flag("CAT_STATUS_SHOW_WIFI", true);
+    out->show_battery       = cat__env_flag("CAT_STATUS_SHOW_BATTERY", true);
+    out->show_battery_level = cat__env_flag("CAT_STATUS_SHOW_BATTERY_LEVEL", false);
+
+    /* Clock token: hide / 12 / 24 / no-ampm (default 24h). */
+    const char *clock = cat__env_nonempty("CAT_STATUS_CLOCK");
+    if (!clock) clock = "24";
+    if (strcmp(clock, "hide") == 0) {
+        out->show_clock = CAT_CLOCK_HIDE;
+    } else if (strcmp(clock, "12") == 0) {
+        out->show_clock = CAT_CLOCK_SHOW;
+        out->use_24h = false;
+    } else if (strcmp(clock, "no-ampm") == 0) {
+        out->show_clock = CAT_CLOCK_SHOW;
+        out->use_24h = false;
+        out->no_ampm = true;
+    } else { /* "24" and any unrecognized value */
+        out->show_clock = CAT_CLOCK_SHOW;
+        out->use_24h = true;
+    }
+
+    /* Apps self-read wifi/battery/clock live (occasional cached read, no hot
+       loop); volume has no live source in an app, so it is never shown. */
+    out->wifi_supplied  = false;
+    out->show_volume    = false;
+    out->volume_percent = -1;
+
+    /* Draw the bar if anything is enabled — battery LEVEL counts on its own
+       (Battery="Percent" stores show_battery=0, show_battery_level=1). */
+    return out->show_wifi || out->show_battery || out->show_battery_level ||
+           out->show_clock != CAT_CLOCK_HIDE;
+}
+
+bool cat_hints_enabled_from_env(void) {
+    return cat__env_flag("CAT_SHOW_HINTS", true);
 }
 
 void cat_draw_status_bar(cat_status_bar_opts *opts) {
