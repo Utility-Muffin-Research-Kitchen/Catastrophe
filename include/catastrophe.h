@@ -248,6 +248,22 @@ typedef enum {
     CAT_FAN_MODE_AUTO_PERFORMANCE,
 } cat_fan_mode;
 
+/* Platform service callbacks supplied by a host app/launcher when Catastrophe
+ * should not probe hardware directly. Return negative values for unavailable
+ * reads, CAT_ERROR for unhandled actions, and CAT_OK for handled actions. */
+typedef struct {
+    void *userdata;
+    int (*wifi_strength)(void *userdata);      /* 0..3, negative if unknown */
+    int (*battery_percent)(void *userdata);    /* 0..100, negative if unknown */
+    int (*charging_state)(void *userdata);     /* 0/1, negative if unknown */
+    int (*set_fan_mode)(void *userdata, cat_fan_mode mode);
+    cat_fan_mode (*get_fan_mode)(void *userdata);
+    int (*set_fan_speed)(void *userdata, int percent);
+    int (*get_fan_speed)(void *userdata);
+    int (*power_suspend)(void *userdata);
+    int (*power_shutdown)(void *userdata);
+} cat_platform_services;
+
 /* ═══════════════════════════════════════════════════════════════════════════
  * Color Type — matches Allium's RGBA uint32 layout
  * ═══════════════════════════════════════════════════════════════════════════
@@ -778,6 +794,7 @@ typedef struct {
     int           device_scale;   /* typically 2 (handheld) or 3 (brick) */
     int           device_padding; /* Screen-edge padding constant (unscaled) */
     int           font_bump;     /* additive bump applied to base font sizes (0–5) */
+    cat_platform_services platform_services;
 
     /* WiFi signal strength cache (device only, 5s poll interval) */
     #if CAT_PLATFORM_IS_DEVICE
@@ -1067,6 +1084,7 @@ const char    *cat_resolve_log_path(const char *app_name);
  * ═══════════════════════════════════════════════════════════════════════════ */
 
 void           cat_set_power_handler(bool enabled);
+void           cat_set_platform_services(const cat_platform_services *services);
 
 /* ═══════════════════════════════════════════════════════════════════════════
  * Public API — CPU & Fan
@@ -4802,6 +4820,18 @@ int cat_get_status_bar_height(void) {
     return CAT_DS(cat__g.device_padding + CAT__PILL_SIZE);
 }
 
+void cat_set_platform_services(const cat_platform_services *services) {
+    if (services) {
+        cat__g.platform_services = *services;
+    } else {
+        memset(&cat__g.platform_services, 0, sizeof(cat__g.platform_services));
+    }
+#if CAT_PLATFORM_IS_DEVICE
+    cat__g.cached_wifi_strength = 0;
+    cat__g.wifi_cache_time_ms = 0;
+#endif
+}
+
 /* ─── Device / Preview status helpers ────────────────────────────────────── */
 
 #if CAT_PLATFORM_IS_DEVICE
@@ -4816,6 +4846,12 @@ static int cat__read_sysfs_int(const char *path) {
 #endif
 
 static int cat__get_battery_percent(void) {
+    if (cat__g.platform_services.battery_percent) {
+        int cap = cat__g.platform_services.battery_percent(cat__g.platform_services.userdata);
+        if (cap >= 0 && cap <= 100) {
+            return cap;
+        }
+    }
 #if CAT_PLATFORM_IS_DEVICE
     int cap;
     #if defined(PLATFORM_MY355) || defined(PLATFORM_MLP1)
@@ -4832,6 +4868,12 @@ static int cat__get_battery_percent(void) {
 }
 
 static bool cat__is_charging(void) {
+    if (cat__g.platform_services.charging_state) {
+        int charging = cat__g.platform_services.charging_state(cat__g.platform_services.userdata);
+        if (charging >= 0) {
+            return charging != 0;
+        }
+    }
 #if CAT_PLATFORM_IS_DEVICE
     int charger, ttf;
     #if defined(PLATFORM_MLP1)
@@ -5062,6 +5104,12 @@ int cat_get_cpu_temp_celsius(void) {
 }
 
 int cat_set_fan_mode(cat_fan_mode mode) {
+    if (cat__g.platform_services.set_fan_mode) {
+        int rc = cat__g.platform_services.set_fan_mode(cat__g.platform_services.userdata, mode);
+        if (rc == CAT_OK) {
+            return CAT_OK;
+        }
+    }
 #if defined(PLATFORM_TG5050) && defined(CAT__FAN_STATE_PATH)
     const char *arg;
     if (mode == CAT_FAN_MODE_MANUAL) return cat__fan_stop_helper();
@@ -5079,6 +5127,13 @@ int cat_set_fan_mode(cat_fan_mode mode) {
 }
 
 cat_fan_mode cat_get_fan_mode(void) {
+    if (cat__g.platform_services.get_fan_mode) {
+        cat_fan_mode mode =
+            cat__g.platform_services.get_fan_mode(cat__g.platform_services.userdata);
+        if (mode != CAT_FAN_MODE_UNSUPPORTED) {
+            return mode;
+        }
+    }
 #if defined(PLATFORM_TG5050) && defined(CAT__FAN_STATE_PATH)
     cat_fan_mode mode = cat__fan_detect_helper_mode();
     if (mode != CAT_FAN_MODE_UNSUPPORTED) return mode;
@@ -5089,6 +5144,12 @@ cat_fan_mode cat_get_fan_mode(void) {
 }
 
 int cat_set_fan_speed(int percent) {
+    if (cat__g.platform_services.set_fan_speed) {
+        int rc = cat__g.platform_services.set_fan_speed(cat__g.platform_services.userdata, percent);
+        if (rc == CAT_OK) {
+            return CAT_OK;
+        }
+    }
 #if defined(PLATFORM_TG5050) && defined(CAT__FAN_STATE_PATH)
     if (percent < 0) return CAT_OK; /* -1 = keep current */
     if (percent > 100) percent = 100;
@@ -5106,6 +5167,12 @@ int cat_set_fan_speed(int percent) {
 }
 
 int cat_get_fan_speed(void) {
+    if (cat__g.platform_services.get_fan_speed) {
+        int percent = cat__g.platform_services.get_fan_speed(cat__g.platform_services.userdata);
+        if (percent >= 0) {
+            return cat__clamp(percent, 0, 100);
+        }
+    }
 #if defined(PLATFORM_TG5050) && defined(CAT__FAN_STATE_PATH)
     int raw = cat__read_sysfs_int(CAT__FAN_STATE_PATH);
     return (raw >= 0) ? raw * 100 / 31 : -1;
@@ -5214,6 +5281,14 @@ static int cat__get_wifi_strength(void) {
     const int unavailable = -10000;
     int result;
 
+    if (cat__g.platform_services.wifi_strength) {
+        int supplied = cat__g.platform_services.wifi_strength(cat__g.platform_services.userdata);
+        if (supplied >= 0) {
+            result = cat__clamp(supplied, 0, 3);
+            goto cache;
+        }
+    }
+
     /* Check if interface is up */
     FILE *f = fopen("/sys/class/net/wlan0/operstate", "r");
     if (!f) { result = 0; goto cache; }
@@ -5243,6 +5318,12 @@ cache:
     cat__g.wifi_cache_time_ms = now;
     return result;
 #else
+    if (cat__g.platform_services.wifi_strength) {
+        int supplied = cat__g.platform_services.wifi_strength(cat__g.platform_services.userdata);
+        if (supplied >= 0) {
+            return cat__clamp(supplied, 0, 3);
+        }
+    }
     int strength = 0;
     if (!cat__env_parse_int("CAT_PREVIEW_WIFI_STRENGTH", &strength)) return 0;
     return cat__clamp(strength, 0, 3);
@@ -5793,6 +5874,20 @@ static int cat__run_power_command(const char *action, const char *command) {
 }
 #endif
 
+static int cat__platform_service_power_suspend(void) {
+    if (!cat__g.platform_services.power_suspend) {
+        return CAT_ERROR;
+    }
+    return cat__g.platform_services.power_suspend(cat__g.platform_services.userdata);
+}
+
+static int cat__platform_service_power_shutdown(void) {
+    if (!cat__g.platform_services.power_shutdown) {
+        return CAT_ERROR;
+    }
+    return cat__g.platform_services.power_shutdown(cat__g.platform_services.userdata);
+}
+
 static void *cat__power_thread_func(void *arg) {
     (void)arg;
 
@@ -5860,12 +5955,17 @@ static void *cat__power_thread_func(void *arg) {
                 if (held_ms >= 1000) {
                     /* Long press: shutdown */
                     cat_log("Power: long press → shutdown");
-                    system("touch /tmp/poweroff");
+                    if (cat__platform_service_power_shutdown() != CAT_OK) {
+                        system("touch /tmp/poweroff");
+                    }
                     sync();
                     exit(0);
                 } else if (released) {
                     /* Short press: suspend */
                     cat_log("Power: short press → suspend");
+                    if (cat__platform_service_power_suspend() == CAT_OK) {
+                        cat_log("Power: suspend handled by platform service");
+                    } else {
                     #if defined(PLATFORM_MY355)
                     int rc = cat__run_power_command("suspend", "echo mem > /sys/power/state");
                     if (rc != 0) {
@@ -5884,6 +5984,7 @@ static void *cat__power_thread_func(void *arg) {
                         }
                     }
                     #endif
+                    }
 
                     /* Ignore power key for a short time after resume so the wake-button
                        press itself doesn't trigger another suspend. */

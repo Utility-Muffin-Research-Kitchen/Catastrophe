@@ -19,6 +19,7 @@ This reference documents Catastrophe **v1.1.0** (2026-03-30).
   - [Drawing Primitives](#drawing-primitives)
   - [Screen Fade](#screen-fade)
   - [Footer & Status Bar](#footer--status-bar)
+  - [Platform Services](#platform-services)
   - [Text Scrolling](#text-scrolling)
   - [Texture Cache](#texture-cache)
   - [Combos](#combos)
@@ -474,6 +475,40 @@ Calculate the pixel width of the status bar pill, including padding. Use this to
 #### `int cat_get_status_bar_height(void)`
 
 Get the height of the status bar in pixels (scaled).
+
+### Platform Services
+
+#### `cat_platform_services`
+
+Install optional platform callbacks for hardware state and actions that
+Catastrophe would otherwise probe directly. Apps that already have a launcher
+or daemon platform layer should supply these callbacks after `cat_init()`.
+
+```c
+typedef struct cat_platform_services {
+    void *userdata;
+    int (*wifi_strength)(void *userdata);      /* 0..3, negative if unknown */
+    int (*battery_percent)(void *userdata);    /* 0..100, negative if unknown */
+    int (*charging_state)(void *userdata);     /* 0/1, negative if unknown */
+    int (*set_fan_mode)(void *userdata, cat_fan_mode mode);
+    cat_fan_mode (*get_fan_mode)(void *userdata);
+    int (*set_fan_speed)(void *userdata, int percent);
+    int (*get_fan_speed)(void *userdata);
+    int (*power_suspend)(void *userdata);
+    int (*power_shutdown)(void *userdata);
+} cat_platform_services;
+```
+
+Callbacks are optional. When a callback is present and returns a valid value,
+Catastrophe uses it first. Missing callbacks, negative state values, or
+unsupported action results fall back to the existing compile-time guarded
+behavior for standalone examples and direct device ports.
+
+#### `void cat_set_platform_services(const cat_platform_services *services)`
+
+Copy the supplied service table into Catastrophe. Pass `NULL` to clear all
+callbacks. Installing or clearing services resets the cached Wi-Fi status so the
+next status-bar draw consults the current provider.
 
 ### Text Scrolling
 
