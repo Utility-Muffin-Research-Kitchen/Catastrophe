@@ -11,7 +11,7 @@
 #   make tg5050       — Cross-compile for TrimUI Smart Pro S
 #   make my355        — Cross-compile for Miyoo Flip
 #   make all          — Build for all device platforms
-#   make assets       — Regenerate tracked status/control atlas PNGs
+#   make assets       — Generate/update tracked status/control atlas PNGs
 #   make package      — Build all + create .pakz archives
 #   make deploy       — Deploy to connected device via adb
 #   make clean        — Remove build artifacts
@@ -47,6 +47,19 @@ ASSETS_DIR   := $(RES_DIR)/assets
 CACHE_DIR    := .cache
 CJSON_DIR    := include/cjson
 
+# Asset atlas generation
+ASSET_GENERATOR       := scripts/generate_assets_atlas.py
+ASSET_CACHE           := $(CACHE_DIR)/assets-atlas.sha256
+ASSET_GENERATE_ARGS   := --out-dir $(ASSETS_DIR) --manifest --preview
+ASSET_TRACKED_OUTPUTS := \
+	$(ASSETS_DIR)/assets@1x.png \
+	$(ASSETS_DIR)/assets@2x.png \
+	$(ASSETS_DIR)/assets@3x.png \
+	$(ASSETS_DIR)/assets@4x.png \
+	$(ASSETS_DIR)/MANIFEST.md
+ASSET_SIGNATURE_PY := import hashlib, pathlib, sys; h=hashlib.sha256(); h.update((sys.argv[1] + "\n").encode("utf-8")); [(h.update(str(pathlib.Path(name)).encode("utf-8") + b"\0"), h.update(pathlib.Path(name).read_bytes())) for name in sys.argv[2:]]; print(h.hexdigest())
+ASSETS_FORCE ?= 0
+
 # cJSON library
 CJSON_SRC    := $(CJSON_DIR)/cJSON.c
 
@@ -56,10 +69,42 @@ WARN_CFLAGS := -Wall -Wextra -Wno-unused-parameter
 
 # ─── Phony targets ───────────────────────────────────────────────────────
 
-.PHONY: all native mac linux windows tg5040 tg5050 my355 assets package deploy clean help FORCE
+.PHONY: all native mac linux windows tg5040 tg5050 my355 assets assets-force package deploy clean help FORCE
 
 assets:
-	python3 scripts/generate_assets_atlas.py --out-dir "$(ASSETS_DIR)" --manifest --preview
+	@set -euo pipefail; \
+	mkdir -p "$(CACHE_DIR)" "$(ASSETS_DIR)"; \
+	tracked_outputs=( $(ASSET_TRACKED_OUTPUTS) ); \
+	missing=0; \
+	for output in "$${tracked_outputs[@]}"; do \
+		if [ ! -f "$$output" ]; then \
+			missing=1; \
+			break; \
+		fi; \
+	done; \
+	if [ "$(ASSETS_FORCE)" != "1" ] && [ "$$missing" -eq 0 ]; then \
+		signature="$$(python3 -c '$(ASSET_SIGNATURE_PY)' "$(ASSET_GENERATE_ARGS)" "$(ASSET_GENERATOR)" "$${tracked_outputs[@]}")"; \
+		cached="$$(cat "$(ASSET_CACHE)" 2>/dev/null || true)"; \
+		if [ "$$cached" = "$$signature" ]; then \
+			echo "Catastrophe asset atlas is up to date."; \
+			exit 0; \
+		fi; \
+		if [ ! -f "$(ASSET_CACHE)" ] && \
+			git rev-parse --is-inside-work-tree >/dev/null 2>&1 && \
+			git diff --quiet -- "$(ASSET_GENERATOR)" "$${tracked_outputs[@]}" && \
+			git diff --cached --quiet -- "$(ASSET_GENERATOR)" "$${tracked_outputs[@]}"; then \
+			printf '%s\n' "$$signature" > "$(ASSET_CACHE)"; \
+			echo "Catastrophe asset atlas is up to date (seeded cache from tracked outputs)."; \
+			exit 0; \
+		fi; \
+	fi; \
+	echo "Generating Catastrophe asset atlas..."; \
+	python3 "$(ASSET_GENERATOR)" --out-dir "$(ASSETS_DIR)" --manifest --preview; \
+	signature="$$(python3 -c '$(ASSET_SIGNATURE_PY)' "$(ASSET_GENERATE_ARGS)" "$(ASSET_GENERATOR)" "$${tracked_outputs[@]}")"; \
+	printf '%s\n' "$$signature" > "$(ASSET_CACHE)"
+
+assets-force:
+	$(MAKE) assets ASSETS_FORCE=1
 
 # ─── Native (auto-detect host OS) ─────────────────────────────────────
 
@@ -363,7 +408,8 @@ help:
 	@echo "  make mac            Build examples for macOS"
 	@echo "  make linux          Build examples for Linux"
 	@echo "  make windows        Build examples for Windows (MSYS2/MinGW)"
-	@echo "  make assets         Regenerate tracked status/control atlas PNGs"
+	@echo "  make assets         Generate/update tracked status/control atlas PNGs"
+	@echo "  make assets-force   Regenerate status/control atlas PNGs unconditionally"
 	@echo ""
 	@echo "  Device (cross-compile via Docker):"
 	@echo "  make tg5040         Cross-compile for TrimUI Brick/Smart Pro"

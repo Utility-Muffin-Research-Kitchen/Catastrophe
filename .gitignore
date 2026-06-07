@@ -5,5 +5,5 @@ build/
 *.exe
 .DS_Store
 __pycache__/
-# QA-only atlas preview (regenerate with `make assets`); not shipped.
+# QA-only atlas preview (regenerate with `make assets-force`); not shipped.
 res/assets/preview.png
