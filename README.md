@@ -1,8 +1,12 @@
-# Catastrophe (')
+# Catastrophe
 
-A header-only C UI toolkit for building graphical tools on retro gaming handhelds running [Allium](https://github.com/goweiwen/Allium).
+Catastrophe is UMRK's shared header-only C UI/runtime toolkit. It provides the
+blocking widgets, input abstraction, theming, scaling, status bar, and drawing
+helpers used by Jawaka and the first-party `.pak` apps.
 
-Current release: **v1.1.0** (2026-03-30).
+The toolkit can read [Allium](https://github.com/goweiwen/Allium)-format
+`stylesheet.json` themes, but Allium is a design/reference format here, not a
+runtime dependency or compatibility target.
 
 Inspired by [Gabagool](https://github.com/BrandonKowalski/gabagool) (Go). Its framework design directly informed the structure of this project, and this C port would not have been feasible without that foundation.
 
@@ -24,7 +28,10 @@ Thanks to Brandon T. Kowalski (https://github.com/BrandonKowalski) for creating 
 | `linux`  | Linux (dev/testing) | Windowed preview (default 1024×768) | native host CPU |
 | `windows` | Windows (MSYS2/MinGW dev/testing) | Windowed preview (default 1024×768) | native host CPU |
 
-Desktop development/testing is supported on macOS, Linux, and Windows. `make native` auto-selects the current host target; `make windows` expects an MSYS2/MinGW shell.
+Desktop development/testing is supported on macOS, Linux, and Windows. `make
+native` auto-selects the current host target; `make windows` expects an
+MSYS2/MinGW shell. MLP1 products consume Catastrophe through their own MLP1
+builds rather than a standalone Catastrophe `mlp1` target.
 
 ## Quick Start
 
@@ -42,18 +49,19 @@ Desktop development/testing is supported on macOS, Linux, and Windows (MSYS2/Min
 ```bash
 make native
 make run-native        # Runs the hello world example
+make run-native-demo   # Runs the widget demo on the current host
 
 # Preview other device resolutions on desktop
 # Substitute other width/height values as needed.
-CAT_WINDOW_WIDTH=1024 CAT_WINDOW_HEIGHT=768 make run-mac-demo   # Brick
-CAT_WINDOW_WIDTH=1280 CAT_WINDOW_HEIGHT=720 make run-mac-demo   # Smart Pro / Smart Pro S
-CAT_WINDOW_WIDTH=640 CAT_WINDOW_HEIGHT=480 make run-mac-demo    # Miyoo Flip
+CAT_WINDOW_WIDTH=1024 CAT_WINDOW_HEIGHT=768 make run-native-demo   # Brick
+CAT_WINDOW_WIDTH=1280 CAT_WINDOW_HEIGHT=720 make run-native-demo   # Smart Pro / Smart Pro S
+CAT_WINDOW_WIDTH=640 CAT_WINDOW_HEIGHT=480 make run-native-demo    # Miyoo Flip
 
 # Override the preview status-bar inputs
 CAT_PREVIEW_WIFI_STRENGTH=3 \
 CAT_PREVIEW_BATTERY_PERCENT=100 \
 CAT_PREVIEW_CHARGING=0 \
-make run-mac-demo
+make run-native-demo
 ```
 
 The status/control sprites used by desktop previews are generated into `res/assets/`.
@@ -130,7 +138,9 @@ int main(int argc, char *argv[]) {
 }
 ```
 
-On device, leave `font_path` unset / `NULL` to use the font from the active stylesheet (or the Allium default font path). A bundled `.ttf` is mainly useful for consistent desktop preview/testing.
+On device, leave `font_path` unset / `NULL` to use the font from the active
+stylesheet or platform defaults. A bundled `.ttf` is mainly useful for
+consistent desktop preview/testing.
 
 ## Architecture
 
@@ -149,7 +159,13 @@ All pixel values are specified at a **1024px reference width** and automatically
 
 ### Theming
 
-Catastrophe uses [Allium](https://github.com/goweiwen/Allium)'s `stylesheet.json` format for themes. The runtime discovers themes from `$CAT_THEMES_DIR`, `res/themes/`, the bundled `themes/Allium-Themes/Themes/` submodule, and the platform theme path derived from `SDCARD_PATH` or `UMRK_LAUNCHER_PATH`. The shipped default theme (`res/themes/Catastrophe/`) reproduces the Apostrophe colors pixel-for-pixel. You can override the accent color at init via `cat_config.primary_color_hex`.
+Catastrophe uses Allium's `stylesheet.json` shape for themes. The runtime
+discovers themes from `$CAT_THEMES_DIR`, `res/themes/`, the bundled
+`themes/Allium-Themes/Themes/` submodule, and the platform theme path derived
+from `SDCARD_PATH` or `UMRK_LAUNCHER_PATH`. Jawaka also exports `CAT_*`
+appearance variables before launching Catastrophe-based UI processes so apps can
+inherit the active theme, font, status-bar, and hint preferences. You can
+override the accent color at init via `cat_config.primary_color_hex`.
 
 ### Input
 
