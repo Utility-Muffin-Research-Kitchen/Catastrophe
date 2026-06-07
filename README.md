@@ -24,7 +24,7 @@ Thanks to Brandon T. Kowalski (https://github.com/BrandonKowalski) for creating 
 | `tg5040` | TrimUI Smart Brick (`tg3040` hardware) | 1024×768 | Allwinner A133 Plus – Quad-core Cortex-A53 |
 | `tg5050` | TrimUI Smart Pro S | 1280×720 | Allwinner A523 – Octa-core Cortex-A55 |
 | `my355`  | Miyoo Flip | 640×480 | Rockchip RK3566 – Quad-core Cortex-A55 |
-| `mlp1`   | MLP1 / Loong handheld target | 960×720 default fallback | platform build |
+| `mlp1`   | MINILOONG Pocket 1 | 960×720 | Rockchip RK3566 – Quad-core Cortex-A55 |
 | `mac`    | macOS (dev/testing) | Windowed preview (default 1024×768) | native host CPU |
 | `linux`  | Linux (dev/testing) | Windowed preview (default 1024×768) | native host CPU |
 | `windows` | Windows (MSYS2/MinGW dev/testing) | Windowed preview (default 1024×768) | native host CPU |
@@ -58,7 +58,7 @@ make run-native-demo   # Runs the widget demo on the current host
 CAT_WINDOW_WIDTH=1024 CAT_WINDOW_HEIGHT=768 make run-native-demo   # Brick
 CAT_WINDOW_WIDTH=1280 CAT_WINDOW_HEIGHT=720 make run-native-demo   # Smart Pro / Smart Pro S
 CAT_WINDOW_WIDTH=640 CAT_WINDOW_HEIGHT=480 make run-native-demo    # Miyoo Flip
-CAT_WINDOW_WIDTH=960 CAT_WINDOW_HEIGHT=720 make run-native-demo    # MLP1 fallback profile
+CAT_WINDOW_WIDTH=960 CAT_WINDOW_HEIGHT=720 make run-native-demo    # MINILOONG Pocket 1 / MLP1
 
 # Override the preview status-bar inputs
 CAT_PREVIEW_WIFI_STRENGTH=3 \
