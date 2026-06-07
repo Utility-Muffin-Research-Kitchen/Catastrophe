@@ -24,6 +24,7 @@ Thanks to Brandon T. Kowalski (https://github.com/BrandonKowalski) for creating 
 | `tg5040` | TrimUI Smart Brick (`tg3040` hardware) | 1024×768 | Allwinner A133 Plus – Quad-core Cortex-A53 |
 | `tg5050` | TrimUI Smart Pro S | 1280×720 | Allwinner A523 – Octa-core Cortex-A55 |
 | `my355`  | Miyoo Flip | 640×480 | Rockchip RK3566 – Quad-core Cortex-A55 |
+| `mlp1`   | MLP1 / Loong handheld target | 960×720 default fallback | platform build |
 | `mac`    | macOS (dev/testing) | Windowed preview (default 1024×768) | native host CPU |
 | `linux`  | Linux (dev/testing) | Windowed preview (default 1024×768) | native host CPU |
 | `windows` | Windows (MSYS2/MinGW dev/testing) | Windowed preview (default 1024×768) | native host CPU |
@@ -31,7 +32,8 @@ Thanks to Brandon T. Kowalski (https://github.com/BrandonKowalski) for creating 
 Desktop development/testing is supported on macOS, Linux, and Windows. `make
 native` auto-selects the current host target; `make windows` expects an
 MSYS2/MinGW shell. MLP1 products consume Catastrophe through their own MLP1
-builds rather than a standalone Catastrophe `mlp1` target.
+builds with `-DPLATFORM_MLP1` rather than a standalone Catastrophe `make mlp1`
+target in this repository.
 
 ## Quick Start
 
@@ -56,6 +58,7 @@ make run-native-demo   # Runs the widget demo on the current host
 CAT_WINDOW_WIDTH=1024 CAT_WINDOW_HEIGHT=768 make run-native-demo   # Brick
 CAT_WINDOW_WIDTH=1280 CAT_WINDOW_HEIGHT=720 make run-native-demo   # Smart Pro / Smart Pro S
 CAT_WINDOW_WIDTH=640 CAT_WINDOW_HEIGHT=480 make run-native-demo    # Miyoo Flip
+CAT_WINDOW_WIDTH=960 CAT_WINDOW_HEIGHT=720 make run-native-demo    # MLP1 fallback profile
 
 # Override the preview status-bar inputs
 CAT_PREVIEW_WIFI_STRENGTH=3 \
@@ -79,6 +82,10 @@ make tg5050           # Cross-compile for TrimUI Smart Pro S
 make my355            # Cross-compile for Miyoo Flip
 make all              # All device platforms
 ```
+
+MLP1 is a supported runtime platform in the headers, but it is built by MLP1
+products in their own build systems. Define `PLATFORM_MLP1` in that build to
+select the MLP1 paths, input mapping, and device metrics.
 
 ### 4. Package & Deploy
 
@@ -147,8 +154,9 @@ consistent desktop preview/testing.
 ```
 catastrophe.h          — Core: init, lifecycle, input, drawing, theming, fonts, scaling
 catastrophe_widgets.h  — Widgets: list, options list, keyboard, confirmation,
-                        selection, process message, download manager, queue manager,
-                        detail screen, color picker, help overlay, file picker
+                        selection, process message, download manager, queue viewer,
+                        detail screen, color picker, help overlay, file picker,
+                        list pane, scroll view
 ```
 
 All widgets use a **blocking model**: they run their own event loop and return a result struct when the user completes an action or presses back (`CAT_CANCELLED`).
@@ -167,9 +175,14 @@ appearance variables before launching Catastrophe-based UI processes so apps can
 inherit the active theme, font, status-bar, and hint preferences. You can
 override the accent color at init via `cat_config.primary_color_hex`.
 
+On MLP1, the default SD root is `/mnt/sdcard`. When environment overrides are
+not set, Catastrophe looks under `/mnt/sdcard/umrk-launcher` for launcher
+assets, fonts, and themes, and under `/mnt/sdcard/.userdata/mlp1` for user
+state.
+
 ### Input
 
-Catastrophe abstracts all input sources into a unified virtual button system (`CAT_BTN_*`). On desktop (macOS, Linux, or Windows) and recognised gamepads it uses the SDL GameController API; on TrimUI devices it reads raw joystick events; and on the Miyoo Flip (my355) it maps hardware-specific keyboard scancodes. Directional buttons auto-repeat with configurable delay/rate. Miyoo Flip builds also use a higher analog deadzone than other targets to reduce accidental horizontal movement from the thumbstick.
+Catastrophe abstracts all input sources into a unified virtual button system (`CAT_BTN_*`). On desktop (macOS, Linux, or Windows) and recognised gamepads it uses the SDL GameController API; on TrimUI devices it reads raw joystick events; on MLP1 it uses the Loong gamepad raw joystick mapping; and on the Miyoo Flip (my355) it maps hardware-specific keyboard scancodes. Directional buttons auto-repeat with configurable delay/rate. Miyoo Flip builds also use a higher analog deadzone than other targets to reduce accidental horizontal movement from the thumbstick. MLP1 exposes the analog-stick click as `CAT_BTN_STICK`.
 
 The **combo system** adds support for chords (simultaneous button presses like L1+R1) and sequences (ordered presses like Up, Up, Down, Down). Register combos with `cat_register_chord()` / `cat_register_sequence()` and poll for events with `cat_poll_combo()`. See `examples/combo/` and the [API reference](docs/API.md#combos) for details.
 
@@ -190,6 +203,8 @@ The **combo system** adds support for chords (simultaneous button presses like L
 | Color Picker | `cat_color_picker()` | 5×5 color grid selector |
 | File Picker | `cat_file_picker()` | Filesystem browser for selecting files or directories with optional folder creation in dir-capable modes |
 | Help Overlay | `cat_show_help_overlay()` | Scrollable text overlay (Menu trigger) |
+| List Pane | `cat_draw_list_pane()` | Non-blocking list draw helper for caller-owned loops |
+| Scroll View | `cat_draw_scroll_view()` | Non-selectable scroll container for tall custom content |
 
 ## Docs
 

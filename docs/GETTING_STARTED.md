@@ -1,8 +1,8 @@
 # Getting Started with Catastrophe
 
-This guide walks you through creating your first Allium app using Catastrophe.
+This guide walks you through creating your first Catastrophe pak.
 
-This guide targets Catastrophe **v1.1.0** (2026-03-30).
+This guide targets the current Catastrophe headers in this repository.
 
 ## Prerequisites
 
@@ -60,6 +60,12 @@ pacman -S mingw-w64-x86_64-curl  # or mingw-w64-clang-aarch64-curl
 
 You need Docker installed and running. The build system automatically pulls the correct toolchain image for each platform.
 
+The root Makefile currently provides cross-compile targets for `tg5040`,
+`tg5050`, and `my355`. MLP1 is a supported runtime platform in the headers, but
+MLP1 products consume Catastrophe through their own build systems with
+`-DPLATFORM_MLP1`; this repository does not currently expose a standalone
+`make mlp1` target.
+
 ### Device Download Manager (Bundled curl)
 
 `cat_download_manager` on device builds uses a bundled libcurl toolchain flow.
@@ -87,7 +93,7 @@ MyPak/
 ├── main.c              # Your application code
 ├── font.ttf            # Optional desktop test font
 ├── Makefile            # Build configuration
-├── launch.sh           # Allium launch script
+├── launch.sh           # Pak launch script
 └── pak.json            # Pak metadata
 ```
 
@@ -103,7 +109,8 @@ MyProject/
 ├── ports/
 │   ├── tg5040/Makefile
 │   ├── tg5050/Makefile
-│   └── my355/Makefile
+│   ├── my355/Makefile
+│   └── mlp1/Makefile      # product-owned when targeting MLP1
 └── third_party/
     └── catastrophe/
         ├── include/
@@ -209,6 +216,7 @@ make run-native
 CAT_WINDOW_WIDTH=1024 CAT_WINDOW_HEIGHT=768 make run-native-demo   # Brick
 CAT_WINDOW_WIDTH=1280 CAT_WINDOW_HEIGHT=720 make run-native-demo   # Smart Pro / Smart Pro S
 CAT_WINDOW_WIDTH=640 CAT_WINDOW_HEIGHT=480 make run-native-demo    # Miyoo Flip
+CAT_WINDOW_WIDTH=960 CAT_WINDOW_HEIGHT=720 make run-native-demo    # MLP1 fallback profile
 ```
 
 `run-native-demo` resolves to the host-specific demo target. The demo loads themes from `themes/Allium-Themes/Themes/` (initialised as a git submodule) and falls back to the bundled `res/themes/Catastrophe/` default.
@@ -269,6 +277,20 @@ make tg5040        # or tg5050 or my355
 make package       # Creates .pakz archive
 make deploy        # Push to connected device via adb
 ```
+
+For MLP1 product builds, compile the same source with `-DPLATFORM_MLP1` in the
+product build system. That selects:
+
+- `CAT_PLATFORM_NAME` = `"mlp1"` and `CAT_PLATFORM_IS_DEVICE` = `1`
+- default SD root `/mnt/sdcard`
+- launcher assets/themes/fonts under `/mnt/sdcard/umrk-launcher`
+- user state under `/mnt/sdcard/.userdata/mlp1`
+- device metrics with scale `2`, padding `10`, and `960x720` fullscreen fallback
+- MLP1 raw joystick mapping, including `CAT_BTN_STICK` for the stick click
+
+The MLP1 power handler is intentionally disabled in Catastrophe pending a stock
+service audit. Use platform services from the host launcher/daemon if the app
+needs power, battery, charging, Wi-Fi, or fan state supplied externally.
 
 ## Step 5: Create the Launch Script
 
@@ -333,7 +355,7 @@ This automatically adapts to the target screen resolution.
 Access current theme colors via `cat_get_theme()`:
 
 ```c
-cat_theme *t = cat_get_theme();
+ap_theme *t = cat_get_theme();
 cat_draw_rounded_rect(x, y, w, h, CAT_S(8), t->highlight);
 ```
 
@@ -346,7 +368,7 @@ TTF_Font *font = cat_get_font(CAT_FONT_MEDIUM);
 cat_draw_text(font, "Hello!", x, y, cat_get_theme()->text);
 ```
 
-Font tiers (base × device_scale): Extra Large (24), Large (16), Medium (14), Small (12), Tiny (10), Micro (7). At device_scale=2 (MY355, TG5050): 48, 32, 28, 24, 20, 14px.
+Font tiers (base × device_scale): Extra Large (24), Large (16), Medium (14), Small (12), Tiny (10), Micro (7). At device_scale=2 (MY355, TG5050, MLP1): 48, 32, 28, 24, 20, 14px.
 
 ## Next Steps
 

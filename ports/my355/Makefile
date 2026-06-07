@@ -32,7 +32,7 @@ OPENSSL_LIBSSL := $(OPENSSL_PREFIX)/lib/libssl.a
 OPENSSL_LIBCRYPTO := $(OPENSSL_PREFIX)/lib/libcrypto.a
 CURL_STAMP  := $(CURL_PREFIX)/.stamp-curl-8.7.1-static2
 DEPS += $(CURL_STAMP)
-CURL_CFLAGS += -I$(CURL_PREFIX)/include -DAP_ENABLE_CURL -ffunction-sections -fdata-sections
+CURL_CFLAGS += -I$(CURL_PREFIX)/include -DCAT_ENABLE_CURL -ffunction-sections -fdata-sections
 CURL_LDFLAGS += \
 	-Wl,--whole-archive $(CURL_PREFIX)/lib/libcurl.a -Wl,--no-whole-archive \
 	$(OPENSSL_LIBSSL) $(OPENSSL_LIBCRYPTO) \

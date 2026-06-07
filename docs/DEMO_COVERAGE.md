@@ -2,7 +2,7 @@
 
 This matrix maps Catastrophe's public API surface to the demos that exercise it.
 
-This matrix reflects Catastrophe **v1.1.0** (2026-03-30).
+This matrix reflects the current Catastrophe examples in this repository.
 
 ## Core API Coverage
 
@@ -41,9 +41,11 @@ This matrix reflects Catastrophe **v1.1.0** (2026-03-30).
 | Help overlay | `examples/demo/main.c` → `Help Overlay` |
 | File picker: files, dirs, both mode with hidden files, extension filter, folder creation, live `A` footer hint | `examples/demo/main.c` → `File Picker` |
 | Download manager | `examples/download/main.c` |
+| Non-blocking list pane and scroll view helpers | API/header documented; no dedicated demo coverage yet |
 
 ## Platform Notes
 
 - Desktop-only window visibility actions are shown in `Core API Lab`.
 - Device-only theme reload and power-handler toggles are shown conditionally in `Core API Lab`.
+- MLP1 is a supported header/runtime platform, but the repo examples do not include a standalone `make mlp1` build target.
 - The download demo uses relative destination paths so it remains portable across desktop and device builds.

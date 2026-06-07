@@ -2,7 +2,7 @@
 
 Visual guide to every widget available in `catastrophe_widgets.h`.
 
-This catalog documents Catastrophe **v1.1.0** (2026-03-30).
+This catalog documents the current Catastrophe widget header in this repository.
 
 Widgets that render footer hints inherit the core footer overflow behaviour from `cat_draw_footer()`: overflowing hints stay on one line, show a `+N` marker, and, in widgets that handle the Menu button, can be inspected via the Menu button.
 
@@ -380,7 +380,7 @@ Image sections are loaded once per detail-screen session and reused every frame 
 `cat_detail_screen()` exits with `CAT_DETAIL_BACK` on B, `CAT_DETAIL_ACTION` on A, and `CAT_DETAIL_SECONDARY_ACTION` on Y. Add a Y footer hint when you want the secondary action to be discoverable.
 
 ```c
-cat_color key_col = cat_get_theme()->text;
+ap_color key_col = cat_get_theme()->text;
 cat_detail_opts opts = {
     .title                  = "Styled Detail",
     .sections               = sections,
@@ -415,11 +415,26 @@ cat_detail_opts opts = {
 
 **Usage**:
 ```c
-cat_color initial = { 255, 100, 50, 255 };
-cat_color result;
+ap_color initial = { 255, 100, 50, 255 };
+ap_color result;
 if (cat_color_picker(initial, &result) == CAT_OK) {
     // Use result.r, result.g, result.b
 }
+```
+
+Use `cat_color_picker_ctx()` when you want the picker to show a live preview
+strip for up to eight named palette roles:
+
+```c
+cat_color_picker_context ctx = {
+    .roles = {
+        { .label = "Accent", .color = current_accent },
+        { .label = "Text",   .color = current_text },
+    },
+    .role_count = 2,
+    .active_role = 0,
+};
+cat_color_picker_ctx(initial, &result, &ctx);
 ```
 
 ---
@@ -486,6 +501,9 @@ Filesystem browser for selecting files or directories. Built on `cat_list()` —
 - Empty directory placeholder when no entries match filters
 
 Dotfiles still participate in the normal extension filter. For example, `.env` is treated like an `env` extension when `show_hidden` is enabled.
+
+MLP1 uses `/mnt/sdcard` as its platform default root when `SDCARD_PATH` is not
+set. The other device ports default to `/mnt/SDCARD`.
 
 **Usage**:
 ```c
@@ -612,7 +630,8 @@ cat_queue_viewer(&opts);
 
 ## Download Manager (`cat_download_manager`)
 
-Multi-threaded file downloader with per-file progress bars. Requires libcurl.
+Multi-threaded file downloader with per-file progress bars. Requires libcurl
+and the `CAT_ENABLE_CURL` compile define.
 
 Device builds use a bundled curl flow (`USE_BUNDLED_CURL=1`), which caches sources in
 `build/third_party/sources`, builds per-platform artifacts under `build/third_party/<platform>/...`,
@@ -653,6 +672,31 @@ cat_download_opts opts = { .max_concurrent = 3 };
 cat_download_result result;
 int rc = cat_download_manager(downloads, 2, &opts, &result);
 if (rc == CAT_OK) printf("%d/%d succeeded\n", result.completed, result.total);
+```
+
+## List Pane (`cat_draw_list_pane`)
+
+Non-blocking list rendering helper for screens that own their input loop, such
+as launcher-style continuous UIs. The caller stores `cat_list_state`, updates it
+from input, and calls `cat_draw_list_pane()` during render.
+
+**Features**:
+- Caller-owned cursor and scroll state
+- Wrapping cursor movement via `cat_list_state_move()`
+- Page, absolute, and first-letter jumps
+- Stateless row rendering callback
+- Automatic scrollbar when `item_count > visible_rows`
+
+**Usage**:
+```c
+static cat_list_state ls;
+cat_list_state_init(&ls, visible_rows);
+
+/* on input */
+cat_list_state_move(&ls, +1, item_count);
+
+/* in render */
+cat_draw_list_pane(x, y, w, h, item_count, &ls, item_h, draw_item, ctx);
 ```
 
 ## Scroll View (`cat_draw_scroll_view`)

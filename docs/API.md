@@ -2,7 +2,7 @@
 
 Complete reference for all public functions, types, and macros in `catastrophe.h` and `catastrophe_widgets.h`.
 
-This reference documents Catastrophe **v1.1.0** (2026-03-30).
+This reference documents the current Catastrophe headers in this repository.
 
 ---
 
@@ -17,6 +17,7 @@ This reference documents Catastrophe **v1.1.0** (2026-03-30).
   - [Fonts](#fonts)
   - [Input](#input)
   - [Drawing Primitives](#drawing-primitives)
+  - [Box Model](#box-model)
   - [Screen Fade](#screen-fade)
   - [Footer & Status Bar](#footer--status-bar)
   - [Platform Services](#platform-services)
@@ -35,11 +36,14 @@ This reference documents Catastrophe **v1.1.0** (2026-03-30).
   - [Confirmation](#confirmation)
   - [Selection](#selection)
   - [Process Message](#process-message)
-  - [Download Manager](#download-manager)
   - [Detail Screen](#detail-screen)
+  - [Queue Viewer](#queue-viewer)
+  - [Download Manager](#download-manager)
   - [Color Picker](#color-picker)
   - [Help Overlay](#help-overlay)
   - [File Picker](#file-picker)
+  - [List Pane](#list-pane)
+  - [Scroll View](#scroll-view)
 
 ---
 
@@ -56,8 +60,9 @@ This reference documents Catastrophe **v1.1.0** (2026-03-30).
 | `CAT_SCALE_DAMPING` | `0.75f` | Damping for screens wider than reference |
 | `CAT_DS(base)` | — | Scale a pixel value by integer `device_scale` (2 or 3) |
 | `CAT_S(base)` | — | Scale a pixel value from reference to actual screen |
-| `CAT_PLATFORM_NAME` | `"tg5040"` etc. | Compile-time platform identifier |
+| `CAT_PLATFORM_NAME` | `"tg5040"`, `"mlp1"`, etc. | Compile-time platform identifier |
 | `CAT_PLATFORM_IS_DEVICE` | `0` or `1` | Whether building for a real device |
+| `CAT_ENABLE_CURL` | build define | Enables `cat_download_manager()` implementation |
 | `CAT_INPUT_DEBOUNCE` | `20` | Input debounce delay (ms) |
 | `CAT_INPUT_REPEAT_DELAY` | `300` | Initial hold delay (ms) |
 | `CAT_INPUT_REPEAT_RATE` | `100` | Repeat rate (ms) |
@@ -67,6 +72,11 @@ This reference documents Catastrophe **v1.1.0** (2026-03-30).
 | `CAT_TEXTURE_CACHE_SIZE` | `8` | LRU texture cache capacity |
 | `CAT_MAX_COMBOS` | `16` | Max registered button combos |
 | `CAT_MAX_LOG_LEN` | `2048` | Max log message length |
+
+Device defaults differ by platform. MLP1 uses `/mnt/sdcard` as the default SD
+root, `/mnt/sdcard/umrk-launcher` for launcher assets/themes/fonts, and
+`/mnt/sdcard/.userdata/mlp1` for user state when environment overrides are not
+set.
 
 ### Types & Enums
 
@@ -78,8 +88,12 @@ Virtual button identifiers, unified from all input sources.
 CAT_BTN_NONE, CAT_BTN_UP, CAT_BTN_DOWN, CAT_BTN_LEFT, CAT_BTN_RIGHT,
 CAT_BTN_A, CAT_BTN_B, CAT_BTN_X, CAT_BTN_Y,
 CAT_BTN_L1, CAT_BTN_L2, CAT_BTN_R1, CAT_BTN_R2,
-CAT_BTN_START, CAT_BTN_SELECT, CAT_BTN_MENU, CAT_BTN_POWER
+CAT_BTN_START, CAT_BTN_SELECT, CAT_BTN_MENU, CAT_BTN_POWER,
+CAT_BTN_QUIT, CAT_BTN_STICK
 ```
+
+`CAT_BTN_STICK` is the analog-stick click. On MLP1 it maps to the Loong gamepad
+`BTN_THUMBL` input.
 
 #### `cat_font_tier`
 
@@ -92,7 +106,7 @@ CAT_FONT_TINY         // 10 × device_scale (multi-char button label)
 CAT_FONT_MICRO        //  7 × device_scale (overlay text)
 ```
 
-Font sizes use integer `device_scale` (2 for MY355/TG5050/TG5040 handheld, 3 for TG5040 brick). On screens with more logical pixels than the 320×240 baseline (MY355), an automatic font bump of 0–5 is added to each base size before scaling. See `cat_get_font_bump()`.
+Font sizes use integer `device_scale` (2 for MY355/TG5050/TG5040 handheld/MLP1, 3 for TG5040 brick). On screens with more logical pixels than the 320×240 baseline (MY355), an automatic font bump of 0–5 is added to each base size before scaling. See `cat_get_font_bump()`.
 
 #### `cat_text_align`
 
@@ -113,25 +127,48 @@ CAT_ACTION_OPTION_CHANGED   // Options list standard value changed
 CAT_ACTION_CUSTOM    // Alias of CAT_ACTION_TRIGGERED (backward compatibility)
 ```
 
-#### `cat_color`
+#### `cat_color` and `ap_color`
 
-Alias for `SDL_Color` (r, g, b, a).
+`cat_color` is a packed `uint32_t` in Catastrophe/Allium RGBA layout:
 
-#### `cat_theme`
+```c
+typedef uint32_t cat_color;
+
+#define CAT_COLOR_R(c)  ((uint8_t)((c) >> 0))
+#define CAT_COLOR_G(c)  ((uint8_t)((c) >> 8))
+#define CAT_COLOR_B(c)  ((uint8_t)((c) >> 16))
+#define CAT_COLOR_A(c)  ((uint8_t)((c) >> 24))
+```
+
+Use `cat_color_rgb()`, `cat_color_rgba()`, `cat_color_from_hex()`,
+`cat_color_to_hex()`, `cat_color_blend()`, and `cat_color_to_sdl()` for packed
+stylesheet colors. `ap_color` is the legacy rendering alias for `SDL_Color` and
+is still used by the immediate drawing APIs and `ap_theme`.
+
+#### `ap_theme`
 
 ```c
 typedef struct {
-    cat_color highlight;        // Selected item pill background
-    cat_color accent;           // Footer outer pill, status bar bg
-    cat_color button_label;     // Text inside footer button pills
-    cat_color text;             // Default text color
-    cat_color highlighted_text; // Text on selected items
-    cat_color hint;             // Dim/help text
-    cat_color background;       // Screen background
+    ap_color highlight;         // Selected item pill background
+    ap_color accent;            // Footer outer pill, status bar bg
+    ap_color button_label;      // Text inside footer button pills
+    ap_color button_glyph_bg;   // Inner A/B/X/Y glyph pill background
+    ap_color text;              // Default text color
+    ap_color highlighted_text;  // Text on selected items
+    ap_color hint;              // Dim/help text
+    ap_color background;        // Screen background
     char     font_path[512];
     char     bg_image_path[512];
-} cat_theme;
+    int      ui_padding_x;
+    int      ui_padding_y;
+    float    pill_radius_ratio;
+    int      pill_corner_mask;  // CAT_CORNER_* bitmask
+} ap_theme;
 ```
+
+This runtime theme type is named `ap_theme` for backward compatibility;
+`cat_get_theme()` returns `ap_theme *`. Stylesheet APIs use packed `cat_color`
+values and convert them into this draw-time theme with `cat_stylesheet_apply()`.
 
 #### `cat_config`
 
@@ -145,6 +182,7 @@ typedef struct {
     bool        disable_background; // Set true to skip bg.png
     cat_cpu_speed cpu_speed;        // Set CPU at init; 0 = CAT_CPU_SPEED_DEFAULT (no-op)
     bool        disable_font_bump; // Set true to disable automatic font bumping
+    bool        start_hidden;      // Create hidden; reveal later with cat_show_window()
 } cat_config;
 ```
 
@@ -190,10 +228,19 @@ typedef struct {
 #define CAT_CLOCK_HIDE  2  // Always hide, regardless of stylesheet
 
 typedef struct {
-    int  show_clock;     // CAT_CLOCK_AUTO (default), CAT_CLOCK_SHOW, or CAT_CLOCK_HIDE
-    bool use_24h;        // Only used when show_clock == CAT_CLOCK_SHOW
-    bool show_battery;   // Show battery icon from device or desktop preview state
-    bool show_wifi;      // Show wifi icon when connected / previewed
+    int  show_clock;          // CAT_CLOCK_AUTO, CAT_CLOCK_SHOW, CAT_CLOCK_HIDE
+    bool use_24h;             // 24-hour clock if true; 12-hour if false
+    bool show_battery;        // Show battery icon
+    bool show_battery_level;  // Show numeric "85%" beside battery
+    bool show_wifi;           // Show wifi icon
+    bool wifi_supplied;       // Use wifi_strength instead of self-read/preview
+    int  wifi_strength;       // 0..3 when wifi_supplied is true
+    bool show_volume;         // Show supplied volume icon
+    int  volume_percent;      // 0..100, or -1 if unknown
+    bool no_ampm;             // 12-hour mode without AM/PM suffix
+    bool no_pill;             // Draw inline without pill background
+    bool use_y;               // Use y_position instead of default top padding
+    int  y_position;
 } cat_status_bar_opts;
 ```
 
@@ -210,6 +257,10 @@ hidden and the pill shrinks accordingly.
 Battery and wifi can be enabled independently. When status sprites are active, the clock is
 hidden, and exactly one of those icons is visible, Catastrophe renders a centered square pill
 for that single icon so width calculation and drawing stay aligned.
+
+`cat_status_bar_from_env()` can populate this struct from the launcher-style
+`CAT_STATUS_*` environment snapshot, and `cat_hints_enabled_from_env()` reads
+`CAT_SHOW_HINTS`.
 
 On device, battery and wifi icons are rendered from the status spritesheet at
 `$CAT_STATUS_ASSETS_DIR/assets@Nx.png` when available; otherwise pills are drawn procedurally.
@@ -229,15 +280,35 @@ Desktop preview environment variables:
 
 #### `int cat_init(cat_config *cfg)`
 
-Initialise Catastrophe. Creates SDL window/renderer, loads fonts, detects screen size, applies the default stylesheet (Apostrophe parity), sets up input, starts power button handler (on device).
+Initialise Catastrophe. Creates the SDL window/renderer, loads fonts, detects
+screen size, applies the configured or default stylesheet, sets up input, and
+starts the power button handler where supported.
 
-On my355 device builds, raw power handling listens for `KEY_POWER` from Linux input devices. A short press triggers suspend, and a long press (>= 1000ms) triggers shutdown orchestration (`/tmp/poweroff`). Suspend first attempts `echo mem > /sys/power/state` and falls back to `echo freeze > /sys/power/state` if needed. After resume, power-key events are ignored for 1000ms to avoid immediate re-suspend from wake events.
+On MLP1, `CAT_ENV=DEV` / `ENVIRONMENT=DEV` still forces windowed/dev mode.
+Outside dev mode, MLP1 uses native display detection when available and falls
+back to `960x720`, overridable via `CAT_WINDOW_WIDTH` / `CAT_WINDOW_HEIGHT`.
+
+On my355 device builds, raw power handling listens for `KEY_POWER` from Linux input devices. A short press triggers suspend, and a long press (>= 1000ms) triggers shutdown orchestration (`/tmp/poweroff`). Suspend first attempts `echo mem > /sys/power/state` and falls back to `echo freeze > /sys/power/state` if needed. After resume, power-key events are ignored for 1000ms to avoid immediate re-suspend from wake events. On MLP1, the power handler is disabled pending a stock-service audit.
 
 Returns `CAT_OK` on success, `CAT_ERROR` on failure.
 
 #### `void cat_quit(void)`
 
 Shut down completely. Frees all resources, destroys SDL context, stops background threads.
+
+#### `void cat_show_window(void)`
+
+Show and raise the SDL window. This pairs with `cat_config.start_hidden` for
+warm-standby overlays.
+
+#### `void cat_hide_window(void)`
+
+Hide the SDL window. No-op if the window has not been created.
+
+#### `void cat_activate_window(void)`
+
+Raise and activate the app window on macOS when the process was spawned from a
+background parent. No-op on other platforms.
 
 ### Screen & Scaling
 
@@ -253,9 +324,15 @@ Get the current scaling factor (screen_width / reference_width, with damping).
 
 Scale a pixel value from 1024-reference space to actual screen space. Equivalent to the `CAT_S()` macro as a function call.
 
+#### `int cat_device_scale(int base)`
+
+Scale a pixel value by the integer device scale. This is equivalent to
+`CAT_DS(base)` as a function call and is useful for pixel-perfect control
+surfaces such as footer/status pills.
+
 #### `int cat_font_size_for_resolution(int base_size)`
 
-Scale a base font size by `device_scale` (integer multiplier: 2 for MY355/TG5050/TG5040 handheld, 3 for TG5040 brick). Returns `base_size * device_scale`.
+Scale a base font size by `device_scale` (integer multiplier: 2 for MY355/TG5050/TG5040 handheld/MLP1, 3 for TG5040 brick). Returns `base_size * device_scale`.
 
 #### `CAT_S(base)`
 
@@ -267,17 +344,61 @@ int margin = CAT_S(20);  // 20px * scale factor
 
 ### Theming
 
-#### `cat_theme *cat_get_theme(void)`
+#### `ap_theme *cat_get_theme(void)`
 
 Get a pointer to the current theme. Modifiable.
 
-#### `cat_color cat_hex_to_color(const char *hex)`
+#### `const cat_stylesheet *cat_get_stylesheet(void)`
 
-Parse a `#RRGGBB` hex string and return the corresponding `cat_color` (with alpha 255). Returns black `{0,0,0,255}` on invalid input.
+Get the active stylesheet snapshot. The returned pointer is owned by
+Catastrophe and remains valid until the next stylesheet apply or quit.
+
+#### `ap_color cat_hex_to_color(const char *hex)`
+
+Parse a `#RRGGBB` hex string and return the corresponding `ap_color` (with alpha 255). Returns black `{0,0,0,255}` on invalid input.
 
 #### `void cat_set_theme_color(const char *hex)`
 
 Parse a `#RRGGBB` string and apply it as the theme accent color: `cat_set_theme_color("#FF6600");`
+
+#### `void cat_set_tab_text_colors(cat_color inactive, cat_color selected)`
+
+Override tab-bar inactive and selected text colors on the active stylesheet.
+This lets host launchers map tab text onto their own palette roles.
+
+#### `void cat_finalize_theme_colors(ap_theme *theme)`
+
+Recompute derived theme colors after direct theme mutation. The selected-row
+text color auto-contrasts against the highlight pill, and tab text colors track
+the current palette. Passing `NULL` is a no-op.
+
+#### Stylesheet Loading
+
+```c
+void   cat_stylesheet_init_default(cat_stylesheet *s);
+int    cat_stylesheet_load_file(cat_stylesheet *s, const char *path);
+int    cat_stylesheet_load_theme(cat_stylesheet *s, const char *theme_name);
+int    cat_stylesheet_apply(cat_stylesheet *s);
+int    cat_stylesheet_available_themes(const char ***out_names, int *out_count);
+void   cat_stylesheet_free_theme_list(const char **names, int count);
+int    cat_stylesheet_list_wallpapers(const char *theme_dir, const char ***out, int *count);
+void   cat_stylesheet_free_string_list(const char **names, int count);
+const char *cat_get_active_theme_dir(void);
+const char *cat_get_active_theme_name(void);
+int    cat_theme_state_load(char *out_name, size_t out_size);
+int    cat_theme_state_save(const char *theme_name);
+```
+
+`cat_stylesheet_load_theme()` searches `$CAT_THEMES_DIR`, bundled `res/themes`,
+the checked-out `themes/Allium-Themes/Themes` tree, and platform runtime theme
+paths. On MLP1, the platform theme path is
+`/mnt/sdcard/umrk-launcher/res/themes` unless `UMRK_LAUNCHER_PATH` overrides
+the launcher root. `cat_stylesheet_apply()` stores the active stylesheet,
+updates the runtime `ap_theme`, reloads fonts/backgrounds as needed, and makes
+`cat_get_stylesheet()` reflect the new state.
+
+Use the matching free helpers for lists returned by
+`cat_stylesheet_available_themes()` and `cat_stylesheet_list_wallpapers()`.
 
 #### `int cat_reload_background(const char *bg_path)`
 
@@ -293,13 +414,29 @@ Get a pre-loaded, pre-scaled font for the given tier. Returns NULL if not loaded
 
 Get the automatic font bump computed at init (0–5). The bump is added to each base font size before `device_scale` multiplication. Computed from the logical resolution (`screen / device_scale`) relative to the 320×240 baseline (MY355). Returns 0 on MY355 and TG5040 brick, typically 2 on TG5050. Set `cat_config.disable_font_bump = true` to force 0.
 
+#### `int cat_set_font_bump(int bump)`
+
+Set the font bump at runtime, clamped to `0..CAT_FONT_BUMP_MAX`, and reload the
+active font tiers. Returns `CAT_OK` on success or `CAT_ERROR` if reloading the
+font fails.
+
+#### `int cat_reload_fonts(const char *font_path)`
+
+Reload all font tiers from `font_path`, or from the normal font search chain
+when `font_path` is `NULL`. The MLP1 fallback chain checks launcher fonts under
+`/mnt/sdcard/umrk-launcher/res/` before the system DejaVu path.
+
 ### Input
 
 #### `bool cat_poll_input(cat_input_event *event)`
 
 Poll for the next input event. Returns `true` if an event was available.
 
-Handles SDL event processing internally: keyboard events, raw joystick buttons/axes/hats (TrimUI), SDL GameController buttons/axes (macOS + recognised gamepads), platform-specific scancodes (my355), and quit events.
+Handles SDL event processing internally: keyboard events, raw joystick
+buttons/axes/hats (TrimUI and MLP1), SDL GameController buttons/axes (desktop +
+recognised gamepads), platform-specific scancodes (my355), power/quit events,
+and directional repeat. MLP1 uses its own Loong gamepad raw button mapping and
+maps the stick click to `CAT_BTN_STICK`.
 
 #### `void cat_flip_face_buttons(bool flip)`
 
@@ -318,6 +455,26 @@ Set input debounce delay in milliseconds.
 Configure directional hold repeat timing for D-pad/arrow/button-mapped directions.
 
 ### Drawing Primitives
+
+#### `cat_dir`
+
+```c
+typedef enum {
+    CAT_DIR_LEFT = 0,
+    CAT_DIR_RIGHT,
+    CAT_DIR_UP,
+    CAT_DIR_DOWN,
+} cat_dir;
+```
+
+#### `CAT_CORNER_*`
+
+```c
+CAT_CORNER_TL, CAT_CORNER_TR, CAT_CORNER_BL, CAT_CORNER_BR, CAT_CORNER_ALL
+```
+
+Corner-selection bitmask used by per-corner rounded rectangles, rounded image
+clipping, and themed pill corner masks.
 
 #### `void cat_clear_screen(void)`
 
@@ -339,21 +496,21 @@ Schedule a redraw in the future while the UI is otherwise idle. This is useful f
 
 Draw the background image/color (called automatically by `cat_clear_screen`).
 
-#### `int cat_draw_text(TTF_Font *font, const char *text, int x, int y, cat_color color)`
+#### `int cat_draw_text(TTF_Font *font, const char *text, int x, int y, ap_color color)`
 
 Render text. Returns the rendered width in pixels.
 
-#### `int cat_draw_text_clipped(TTF_Font *font, const char *text, int x, int y, cat_color color, int max_w)`
+#### `int cat_draw_text_clipped(TTF_Font *font, const char *text, int x, int y, ap_color color, int max_w)`
 
 Render text clipped to a maximum width. Performs a hard pixel clip with no truncation indicator.
 
-#### `int cat_draw_text_ellipsized(TTF_Font *font, const char *text, int x, int y, cat_color color, int max_w)`
+#### `int cat_draw_text_ellipsized(TTF_Font *font, const char *text, int x, int y, ap_color color, int max_w)`
 
 Render text truncated with "..." if it exceeds `max_w`. If the text fits, it is rendered normally. Uses a binary search to find the longest prefix that fits alongside the ellipsis, respecting UTF-8 character boundaries. Returns the rendered width in pixels.
 
-#### `void cat_draw_text_wrapped(TTF_Font *font, const char *text, int x, int y, int max_w, cat_color color, cat_text_align align)`
+#### `int cat_draw_text_wrapped(TTF_Font *font, const char *text, int x, int y, int max_w, ap_color color, cat_text_align align)`
 
-Render multi-line word-wrapped text.
+Render multi-line word-wrapped text and return the rendered height.
 
 #### `int cat_measure_text(TTF_Font *font, const char *text)`
 
@@ -367,25 +524,46 @@ Measure the width the text would occupy if ellipsized to fit `max_w`, without re
 
 Measure the total height in pixels that word-wrapped text would occupy at the given `max_w` constraint, without rendering. Useful for pre-calculating layout sizes.
 
-#### `void cat_draw_rect(int x, int y, int w, int h, cat_color color)`
+#### `void cat_draw_rect(int x, int y, int w, int h, ap_color color)`
 
 Draw a filled rectangle.
 
-#### `void cat_draw_pill(int x, int y, int w, int h, cat_color color)`
+#### `void cat_draw_pill(int x, int y, int w, int h, ap_color color)`
 
 Draw a pill shape (fully rounded rectangle where corner radius = h/2). Uses the pre-rendered pill sprite when status assets are loaded; otherwise falls back to procedural drawing.
 
-#### `void cat_draw_rounded_rect(int x, int y, int w, int h, int radius, cat_color color)`
+#### `void cat_draw_rounded_rect(int x, int y, int w, int h, int radius, ap_color color)`
 
 Draw a filled rounded rectangle with arbitrary corner radius using scanline quarter-circle fill with sub-pixel anti-aliasing (no SDL2_gfx dependency).
 
-#### `void cat_draw_circle(int cx, int cy, int r, cat_color c)`
+#### `void cat_draw_rounded_rect_ex(int x, int y, int w, int h, int radius, unsigned corners, ap_color color)`
+
+Draw a filled rounded rectangle while rounding only the corners in the
+`CAT_CORNER_TL`, `CAT_CORNER_TR`, `CAT_CORNER_BL`, `CAT_CORNER_BR` bitmask.
+`CAT_CORNER_ALL` rounds all four corners.
+
+#### `void cat_draw_circle(int cx, int cy, int r, ap_color color)`
 
 Draw a filled circle at center (cx, cy) with radius r.
+
+#### `void cat_draw_star(int cx, int cy, int outer_r, ap_color color)`
+
+Draw a filled five-point star.
+
+#### `void cat_draw_triangle(int x, int y, int w, int h, cat_dir dir, ap_color color)`
+
+Draw a filled triangle inside the given rectangle, pointing `CAT_DIR_LEFT`,
+`CAT_DIR_RIGHT`, `CAT_DIR_UP`, or `CAT_DIR_DOWN`.
 
 #### `void cat_draw_image(SDL_Texture *tex, int x, int y, int w, int h)`
 
 Draw a loaded SDL texture at the given position/size.
+
+#### `void cat_draw_image_rounded_ex(SDL_Texture *tex, int x, int y, int w, int h, int radius, unsigned corners)`
+
+Draw a texture clipped to a rounded rectangle using the same `CAT_CORNER_*`
+mask as `cat_draw_rounded_rect_ex()`. Falls back to a plain image draw when a
+rounded render target is unavailable.
 
 #### `SDL_Texture *cat_load_image(const char *path)`
 
@@ -395,9 +573,28 @@ Load an image from disk (PNG, JPG) and return an SDL_Texture. Returns NULL on fa
 
 Draw a vertical scrollbar track and thumb. The thumb size and position are computed from visible/total/offset. Does nothing if total <= visible.
 
-#### `void cat_draw_progress_bar(int x, int y, int w, int h, float progress, cat_color fg, cat_color bg)`
+#### `void cat_draw_progress_bar(int x, int y, int w, int h, float progress, ap_color fg, ap_color bg)`
 
 Draw a rounded progress bar. `progress` is clamped to 0.0–1.0.
+
+#### `void cat_draw_tab_bar(const char *const *labels, int count, int active_index)`
+
+Draw a full-width tab bar using the active stylesheet tab colors. When tabs do
+not fit, the bar windows around the active tab and draws triangle affordances
+for hidden tabs.
+
+#### `int cat_get_tab_bar_height(void)`
+
+Return the tab bar height in pixels.
+
+#### `void cat_set_tab_bar_reserved_right(int px)`
+
+Reserve right-side tab-bar width, usually for an inline status bar.
+
+#### `void cat_draw_textured_parallelogram(SDL_Texture *tex, const SDL_FPoint quad[4], uint8_t alpha)`
+
+Draw a texture into an arbitrary four-corner quadrilateral using
+`SDL_RenderGeometry` when available.
 
 #### `SDL_Rect cat_get_content_rect(bool has_title, bool has_footer, bool has_status_bar)`
 
@@ -410,6 +607,28 @@ Draw a title at the top-left of the screen. If `status_bar` is non-NULL, the sta
 #### `void cat_draw_screen_title_centered(const char *title, cat_status_bar_opts *status_bar)`
 
 Draw a title centered horizontally in the available space. Behaves like `cat_draw_screen_title` but centers the text instead of left-aligning it. Uses the same progressive font-tier fallback (extra-large → large → medium) and clips to avoid overlapping the status bar.
+
+### Box Model
+
+Small geometry helpers for building margin-free layouts. `cat_box` stores a
+rectangle plus internal padding; helpers carve strips and split columns without
+doing any drawing.
+
+```c
+typedef struct {
+    int x, y, w, h;
+    int pad_t, pad_r, pad_b, pad_l;
+} cat_box;
+
+SDL_Rect cat_box_content(const cat_box *b);
+cat_box  cat_box_carve_top(cat_box *b, int height);
+cat_box  cat_box_carve_bottom(cat_box *b, int height);
+void     cat_box_split_cols(const cat_box *b, int left_w, int gutter,
+                            cat_box *left, cat_box *right);
+```
+
+All dimensions are final pixels. Callers should pre-scale constants with
+`CAT_S()` or `CAT_DS()`.
 
 ### Screen Fade
 
@@ -476,6 +695,18 @@ Calculate the pixel width of the status bar pill, including padding. Use this to
 
 Get the height of the status bar in pixels (scaled).
 
+#### `bool cat_status_bar_from_env(cat_status_bar_opts *out)`
+
+Populate `out` from launcher-style `CAT_STATUS_*` environment variables and
+return whether any status element should be drawn. Catastrophe still self-reads
+live Wi-Fi/battery/clock state unless the caller supplies explicit values such
+as `wifi_supplied` / `wifi_strength`.
+
+#### `bool cat_hints_enabled_from_env(void)`
+
+Read `CAT_SHOW_HINTS`. Unset defaults to `true`; `"0"` disables footer/hint
+display.
+
 ### Platform Services
 
 #### `cat_platform_services`
@@ -523,6 +754,30 @@ Reset a text scroll state to the beginning.
 #### `void cat_text_scroll_update(cat_text_scroll *scroll, int text_w, int visible_w, uint32_t dt_ms)`
 
 Advance the ping-pong scroll animation. Call once per frame, passing the frame delta time in milliseconds.
+
+#### `cat_marquee` and `cat_draw_text_marquee`
+
+```c
+typedef enum {
+    CAT_MARQUEE_LOOP = 0,
+    CAT_MARQUEE_PINGPONG
+} cat_marquee_mode;
+
+typedef struct {
+    uint32_t         elapsed_ms;
+    cat_marquee_mode mode;
+} cat_marquee;
+
+bool cat_draw_text_marquee(TTF_Font *font, const char *text, int x, int y,
+                           ap_color color, int visible_w,
+                           cat_marquee *m, uint32_t dt_ms);
+```
+
+Draw text clipped to `visible_w`. If it fits, the function draws normally and
+returns `false`. If it overflows, it scrolls after an initial pause and returns
+`true` while another frame is needed. `CAT_MARQUEE_LOOP` wraps continuously;
+`CAT_MARQUEE_PINGPONG` scrolls to the end, pauses, and scrolls back. The clip
+rect intersects any existing clip, so it composes inside `cat_draw_scroll_view()`.
 
 ### Texture Cache
 
@@ -701,17 +956,27 @@ Get the underlying SDL window.
 
 #### `void cat_show_window(void)`
 
-Show the SDL window. Primarily useful on desktop builds where the window may be hidden at startup.
+Show and raise the SDL window. Primarily useful with `cat_config.start_hidden`.
 
 #### `void cat_hide_window(void)`
 
 Hide the SDL window. No-op if the window has not been created.
 
+#### `void cat_activate_window(void)`
+
+Raise and activate the application window on macOS when started from a
+background process. No-op on other platforms.
+
 ### Power
 
 #### `void cat_set_power_handler(bool enabled)`
 
-Enable or disable the background power button handler. On device, this listens for `KEY_POWER` from Linux input devices — a short press triggers suspend, a long press (>= 1s) triggers shutdown. Enabled automatically by `cat_init()` on device builds.
+Enable or disable the background power button handler. On supported device
+ports, this listens for `KEY_POWER` from Linux input devices: a short press
+triggers suspend, and a long press (>= 1s) triggers shutdown. Enabled
+automatically by `cat_init()` on supported device builds. On MLP1, the handler
+is disabled pending a stock-service audit; provide power callbacks through
+`cat_platform_services` if a host daemon should own those actions.
 
 ### CPU & Fan
 
@@ -824,6 +1089,7 @@ Read the current fan speed as a 0–100 percentage. Returns `0` on non-TG5050 pl
 | MY355 (Miyoo Flip) | `cpufreq/policy0/scaling_setspeed` | None |
 | TG5040 (Trimui Brick) | `cpu0/cpufreq/scaling_setspeed` | None |
 | TG5050 (Trimui Smart Pro S) | `cpu4/cpufreq/scaling_setspeed` (big core) | `cooling_device0/cur_state` (0–31), plus `fancontrol` helper auto curves |
+| MLP1 | Host/platform service expected | Host/platform service expected |
 | Desktop | No-op | No-op |
 
 #### Example
@@ -1118,7 +1384,7 @@ typedef struct {
     ...
     bool        center_title;
     bool        show_section_separator;
-    const cat_color *key_color;
+    const ap_color *key_color;
     TTF_Font   *body_font;           // Override body/value text (default: CAT_FONT_TINY)
     TTF_Font   *section_title_font;  // Override section headers (default: CAT_FONT_SMALL)
     TTF_Font   *key_font;            // Override info-pair key text (default: CAT_FONT_TINY)
@@ -1241,11 +1507,13 @@ int cat_download_manager(cat_download *downloads, int count,
                         cat_download_opts *opts, cat_download_result *result);
 ```
 
-Multi-threaded file downloader with per-file progress bars. Requires libcurl (compile with `-DAP_ENABLE_CURL` and link with `-lcurl`).
+Multi-threaded file downloader with per-file progress bars. Requires libcurl
+(compile with `-DCAT_ENABLE_CURL` and link with `-lcurl`).
 
 For Catastrophe device example builds, bundled curl is enabled by default for `EXAMPLE=download` via `USE_BUNDLED_CURL=1`.
 This builds dependencies into `build/third_party/<platform>/...`, stages runtime libs in `build/<platform>/download/lib`,
-and expects pak launchers to include that directory in `LD_LIBRARY_PATH`.
+and stages `cacert.pem` into the pak `lib` directory. Launchers should export
+`SSL_CERT_FILE=$PAK_DIR/lib/cacert.pem` when that file is present.
 
 **Features**:
 - Thread pool with configurable concurrency (default 3)
@@ -1291,10 +1559,24 @@ typedef struct {
 ### Color Picker
 
 ```c
-int cat_color_picker(cat_color initial, cat_color *result);
+int cat_color_picker(ap_color initial, ap_color *result);
+int cat_color_picker_ctx(ap_color initial, ap_color *result,
+                         cat_color_picker_context *context);
 ```
 
 5×5 grid of predefined colors. Navigate with D-Pad, confirm with A.
+
+`cat_color_picker_ctx()` adds an optional live preview strip:
+
+```c
+typedef struct {
+    struct { const char *label; ap_color color; } roles[8];
+    int role_count;
+    int active_role;   /* -1 = none */
+} cat_color_picker_context;
+```
+
+Pass `NULL` for the context to use the plain picker.
 
 ### Help Overlay
 
@@ -1366,6 +1648,7 @@ typedef struct {
 
 Notes:
 - On device, `SDCARD_PATH` is always the hard ceiling even if `root_path` is provided.
+- MLP1's platform default is `/mnt/sdcard`; the other device ports default to `/mnt/SDCARD`.
 - On desktop, `root_path` overrides the default home root when provided.
 - `initial_path` is only used when it resolves to a directory inside the effective root.
 - `allow_create` is ignored in `CAT_FILE_PICKER_FILES`.
@@ -1388,3 +1671,59 @@ if (rc == CAT_OK) {
     printf("Selected: %s (dir=%d)\n", result.path, result.is_directory);
 }
 ```
+
+### List Pane
+
+Non-blocking list draw helper for callers that own their own event/render loop.
+Unlike `cat_list()`, this API never polls input or blocks; the caller updates
+`cat_list_state` and draws once per frame.
+
+```c
+typedef struct {
+    int cursor;
+    int scroll_offset;
+    int visible_rows;
+} cat_list_state;
+
+typedef void (*cat_list_item_draw_fn)(int idx, int x, int y, int w, int h,
+                                      bool selected, void *user);
+
+void cat_list_state_init(cat_list_state *s, int visible_rows);
+void cat_list_state_move(cat_list_state *s, int delta, int count);
+void cat_list_state_page(cat_list_state *s, int delta, int count);
+void cat_list_state_jump(cat_list_state *s, int target, int count);
+int  cat_list_state_jump_letter(cat_list_state *s,
+                                const char *(*get_label)(int idx, void *user),
+                                void *user, int count, int direction);
+void cat_draw_list_pane(int x, int y, int w, int h,
+                        int item_count, const cat_list_state *state,
+                        int item_height, cat_list_item_draw_fn draw_item,
+                        void *user);
+```
+
+`cat_list_state_move()` wraps at the top/bottom. Page and direct jumps clamp.
+`cat_draw_list_pane()` draws only visible rows and adds a scrollbar when needed.
+
+### Scroll View
+
+Non-selectable vertical scroll container for custom content taller than its
+viewport.
+
+```c
+typedef struct {
+    int offset;
+} cat_scroll_state;
+
+typedef void (*cat_scroll_content_fn)(int x, int y, int w, void *user);
+
+void cat_scroll_state_init(cat_scroll_state *s);
+void cat_scroll_state_move(cat_scroll_state *s, int delta_px);
+void cat_draw_scroll_view(int x, int y, int w, int h, int content_height,
+                          cat_scroll_state *state,
+                          cat_scroll_content_fn draw, void *user);
+```
+
+The view clamps `state->offset` to the valid range, clips drawing to the
+viewport, passes a content width that excludes the scrollbar gutter, and draws a
+scrollbar only when content overflows. It composes with `cat_draw_text_marquee()`
+because the marquee helper preserves existing clip rectangles.

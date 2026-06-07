@@ -1447,7 +1447,7 @@ static const char *cat__button_names[CAT_BTN_COUNT] = {
     "NONE", "UP", "DOWN", "LEFT", "RIGHT",
     "A", "B", "X", "Y",
     "L1", "L2", "R1", "R2",
-    "START", "SELECT", "MENU", "POWER", "QUIT"
+    "START", "SELECT", "MENU", "POWER", "QUIT", "STICK"
 };
 
 /* ─── Logging ────────────────────────────────────────────────────────────── */

@@ -2,7 +2,7 @@
 
 This guide helps you migrate UI code from [Gabagool](https://github.com/LoveRetro/gabagool) to Catastrophe.
 
-This guide targets Catastrophe **v1.1.0** (2026-03-30).
+This guide targets the current Catastrophe headers in this repository.
 
 ## Overview of Changes
 
@@ -441,6 +441,6 @@ cat_download_manager(downloads, 2, &opts, &result);
 ```
 
 **Key differences**:
-- Go's HTTP client → libcurl (compile with `-DAP_ENABLE_CURL`, link with `-lcurl`)
+- Go's HTTP client → libcurl (compile with `-DCAT_ENABLE_CURL`, link with `-lcurl`)
 - Go's goroutines → pthreads (managed internally by the widget)
 - Status is tracked per-job via the `cat_download` struct fields (`status`, `progress`, `speed_bps`)
