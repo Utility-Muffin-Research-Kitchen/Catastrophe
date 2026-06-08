@@ -5567,7 +5567,12 @@ static void cat__draw_status_bar_battery_sprite(int x, int y, TTF_Font *font) {
         int level = (int)(phase * 100u / period);  /* 0..99, loops */
         int fill_w = cav_w * level / 100;
         if (fill_w > 0) cat_draw_rect(cav_x, cav_y, fill_w, cav_h, charge_green);
-        cat_request_frame_in(60);
+        /* Each requested frame forces a full launcher re-render (~5% of one core),
+           so a tight interval here burns CPU continuously while on the charger
+           (the original 60ms/~16fps cost ~45%). The fill bar is only ~24px wide
+           over a 3s sweep, so 500ms (~2fps, ~4px/step) still reads as "filling"
+           while keeping the idle-charging load to ~10%. */
+        cat_request_frame_in(500);
         return;
     }
 
@@ -5583,7 +5588,9 @@ static void cat__draw_status_bar_battery_sprite(int x, int y, TTF_Font *font) {
             if (fill_w < s) fill_w = s;
             cat_draw_rect(cav_x, cav_y, fill_w, cav_h, low_red);
         }
-        cat_request_frame_in(120);
+        /* Red low-battery blink toggles at ~700ms/1200ms boundaries; 250ms catches
+           the toggle promptly without the every-120ms full re-render. */
+        cat_request_frame_in(250);
         return;
     }
 
