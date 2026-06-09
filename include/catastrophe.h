@@ -697,6 +697,11 @@ typedef struct {
                                         caller shows it later with cat_show_window().
                                         Lets a daemon warm up a window behind another
                                         fullscreen app without mapping a surface. */
+    bool        defer_input_init;    /* Skip the joystick subsystem + device scan in
+                                        cat_init (~200ms on device); the caller runs it
+                                        later via cat_init_input(), e.g. after the first
+                                        frame is on screen. Input polling lazily
+                                        initializes it as a fallback. */
 } cat_config;
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -717,6 +722,7 @@ typedef struct {
     bool                needs_frame;       /* true = render next frame at 60fps */
     uint32_t            next_redraw_ms;    /* absolute time of next scheduled redraw (0 = none) */
     int                 input_fd;          /* gamepad evdev fd for idle poll() wake (-1 = unavailable) */
+    bool                input_backend_ready; /* joystick subsystem + devices opened */
 
     /* Scaling */
     float         scale_factor;
@@ -848,6 +854,11 @@ static inline float cat__clampf(float v, float lo, float hi) {
 
 int            cat_init(cat_config *cfg);
 void           cat_quit(void);
+/* Initialize the joystick subsystem and open input devices. Implied by
+ * cat_init unless cat_config.defer_input_init is set; idempotent. Deferred
+ * callers run it once the first frame is on screen — input polling also
+ * triggers it lazily as a fallback. */
+void           cat_init_input(void);
 SDL_Renderer  *cat_get_renderer(void);
 SDL_Window    *cat_get_window(void);
 int            cat_get_screen_width(void);
@@ -1611,6 +1622,7 @@ static void cat__apply_env_appearance_overrides(void) {
 
 /* Forward declarations from later in the implementation */
 static int cat__load_fonts(const char *user_font_path);
+static void cat__input_backend_init(void);
 
 static void cat__stylesheet_font_init_default(cat_stylesheet_font *f) {
     f->path[0] = '\0';
@@ -3188,6 +3200,10 @@ static void cat__handle_sdl_event(SDL_Event *ev, uint32_t now) {
 }
 
 static void cat__process_sdl_events(void) {
+    if (!cat__g.input_backend_ready) {
+        cat__input_backend_init();
+    }
+
     uint32_t now = SDL_GetTicks();
 
     SDL_Event ev;
@@ -6094,64 +6110,23 @@ static int cat__open_gamepad_wake_fd(void) {
 }
 #endif
 
-int cat_init(cat_config *cfg) {
-    if (cat__g.initialized) {
-        cat__set_error("Already initialized");
-        return CAT_ERROR;
+/* Joystick subsystem + device scan (~200ms on device, dominated by the udev
+   walk over /dev/input). Split out of cat_init so apps on the boot path can
+   defer it past their first frame (cat_config.defer_input_init +
+   cat_init_input); the event pump also calls it lazily as a fallback. */
+static void cat__input_backend_init(void) {
+    if (cat__g.input_backend_ready) {
+        return;
     }
+    cat__g.input_backend_ready = true;
 
-    memset(&cat__g, 0, sizeof(cat__g));
-    cat__g.input_fd = -1;
-    #if CAT_PLATFORM_IS_DEVICE
-    cat__g.power_fd = -1;
-    #endif
-
-    /* Logging */
-    if (cfg && cfg->log_path) {
-        cat_set_log_path(cfg->log_path);
-    }
-
-    cat_log("Catastrophe initializing (platform: %s)", CAT_PLATFORM_NAME);
-
-    /* Initialize stylesheet with defaults */
-    cat_stylesheet_init_default(&cat__g.stylesheet);
-
-    /* Set themes directory from env var or platform default */
-    const char *td = cat__env_nonempty("CAT_THEMES_DIR");
-    if (td) {
-        strncpy(cat__g.themes_dir, td, sizeof(cat__g.themes_dir) - 1);
-        cat__g.themes_dir[sizeof(cat__g.themes_dir) - 1] = '\0';
-    } else {
-        cat__g.themes_dir[0] = '\0';
-    }
-
-    /* Input defaults */
-    cat__g.input_delay_ms = CAT_INPUT_DEBOUNCE;
-    cat__g.input_repeat_delay_ms = CAT_INPUT_REPEAT_DELAY;
-    cat__g.input_repeat_rate_ms = CAT_INPUT_REPEAT_RATE;
-    cat__g.footer_overflow_opts.enabled = true;
-    cat__g.footer_overflow_opts.chord_a = CAT_BTN_NONE;
-    cat__g.footer_overflow_opts.chord_b = CAT_BTN_NONE;
-
-    uint32_t sdl_flags = SDL_INIT_VIDEO | SDL_INIT_JOYSTICK | SDL_INIT_EVENTS;
+    uint32_t joy_flags = SDL_INIT_JOYSTICK;
     #if !CAT_PLATFORM_IS_DEVICE
-    sdl_flags |= SDL_INIT_GAMECONTROLLER;
+    joy_flags |= SDL_INIT_GAMECONTROLLER;
     #endif
-    if (SDL_Init(sdl_flags) < 0) {
-        cat__set_error("SDL_Init failed: %s", SDL_GetError());
-        return CAT_ERROR;
-    }
-
-    if (TTF_Init() < 0) {
-        cat__set_error("TTF_Init failed: %s", TTF_GetError());
-        SDL_Quit();
-        return CAT_ERROR;
-    }
-
-    int img_flags = IMG_INIT_PNG | IMG_INIT_JPG;
-    if (!(IMG_Init(img_flags) & img_flags)) {
-        cat_log("Warning: SDL_image init incomplete: %s", IMG_GetError());
-        /* Non-fatal — some platforms may not support all formats */
+    if (SDL_InitSubSystem(joy_flags) < 0) {
+        cat_log("ERROR: SDL_InitSubSystem(joystick) failed: %s", SDL_GetError());
+        return;
     }
 
     /* Open input devices.
@@ -6195,6 +6170,90 @@ int cat_init(cat_config *cfg) {
     /* Open a dedicated evdev fd used only to wake from idle poll() in cat_present(). */
     cat__g.input_fd = cat__open_gamepad_wake_fd();
     #endif
+}
+
+void cat_init_input(void) {
+    if (!cat__g.initialized) {
+        return;
+    }
+    cat__input_backend_init();
+}
+
+int cat_init(cat_config *cfg) {
+    if (cat__g.initialized) {
+        cat__set_error("Already initialized");
+        return CAT_ERROR;
+    }
+
+    memset(&cat__g, 0, sizeof(cat__g));
+    cat__g.input_fd = -1;
+    #if CAT_PLATFORM_IS_DEVICE
+    cat__g.power_fd = -1;
+    #endif
+
+    /* Logging */
+    if (cfg && cfg->log_path) {
+        cat_set_log_path(cfg->log_path);
+    }
+
+    cat_log("Catastrophe initializing (platform: %s)", CAT_PLATFORM_NAME);
+
+    /* Per-phase init timings, reported in one line before "initialized
+       successfully" — keeps boot-time regressions attributable. */
+    uint32_t init_t0 = SDL_GetTicks();
+    uint32_t init_t = init_t0;
+    uint32_t init_ms_sdl = 0, init_ms_sdl_joy = 0, init_ms_ttf_img = 0,
+             init_ms_window = 0, init_ms_renderer = 0,
+             init_ms_sync = 0, init_ms_theme = 0, init_ms_fonts = 0,
+             init_ms_bg = 0, init_ms_assets = 0;
+    #define CAT__INIT_MARK(var) \
+        do { uint32_t now__ = SDL_GetTicks(); (var) = now__ - init_t; init_t = now__; } while (0)
+
+    /* Initialize stylesheet with defaults */
+    cat_stylesheet_init_default(&cat__g.stylesheet);
+
+    /* Set themes directory from env var or platform default */
+    const char *td = cat__env_nonempty("CAT_THEMES_DIR");
+    if (td) {
+        strncpy(cat__g.themes_dir, td, sizeof(cat__g.themes_dir) - 1);
+        cat__g.themes_dir[sizeof(cat__g.themes_dir) - 1] = '\0';
+    } else {
+        cat__g.themes_dir[0] = '\0';
+    }
+
+    /* Input defaults */
+    cat__g.input_delay_ms = CAT_INPUT_DEBOUNCE;
+    cat__g.input_repeat_delay_ms = CAT_INPUT_REPEAT_DELAY;
+    cat__g.input_repeat_rate_ms = CAT_INPUT_REPEAT_RATE;
+    cat__g.footer_overflow_opts.enabled = true;
+    cat__g.footer_overflow_opts.chord_a = CAT_BTN_NONE;
+    cat__g.footer_overflow_opts.chord_b = CAT_BTN_NONE;
+
+    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS) < 0) {
+        cat__set_error("SDL_Init failed: %s", SDL_GetError());
+        return CAT_ERROR;
+    }
+    CAT__INIT_MARK(init_ms_sdl);
+
+    if (cfg && cfg->defer_input_init) {
+        cat_log("Input init deferred (cat_init_input)");
+    } else {
+        cat__input_backend_init();
+    }
+    CAT__INIT_MARK(init_ms_sdl_joy);
+
+    if (TTF_Init() < 0) {
+        cat__set_error("TTF_Init failed: %s", TTF_GetError());
+        SDL_Quit();
+        return CAT_ERROR;
+    }
+
+    int img_flags = IMG_INIT_PNG | IMG_INIT_JPG;
+    if (!(IMG_Init(img_flags) & img_flags)) {
+        cat_log("Warning: SDL_image init incomplete: %s", IMG_GetError());
+        /* Non-fatal — some platforms may not support all formats */
+    }
+    CAT__INIT_MARK(init_ms_ttf_img);
 
     /* Default face-button flip on TrimUI devices (firmware swaps A/B at hardware level) */
 #if defined(PLATFORM_TG5040) || defined(PLATFORM_TG5050)
@@ -6298,6 +6357,7 @@ int cat_init(cat_config *cfg) {
         SDL_Quit();
         return CAT_ERROR;
     }
+    CAT__INIT_MARK(init_ms_window);
 
     /* Set render quality hint before creating renderer/textures */
     SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "1"); /* bilinear filtering */
@@ -6332,14 +6392,23 @@ int cat_init(cat_config *cfg) {
         cat__g.renderer_has_vsync = false;
     }
     cat_log("Renderer vsync: %s", cat__g.renderer_has_vsync ? "yes" : "no");
+    CAT__INIT_MARK(init_ms_renderer);
 
-    /* Framebuffer sync workaround — render 3 black frames */
+    /* Framebuffer sync workaround — render 3 black frames to flush stale
+       fbdev buffers on the TrimUI-class ports. MLP1 composites through
+       Weston/Wayland where buffers start clean and nothing is shown before
+       the first real commit — and each of these vsync'd presents blocks
+       ~90ms while the surface is occluded by the boot transition, so the
+       flush is skipped there. */
+    #if !defined(PLATFORM_MLP1)
     for (int i = 0; i < 3; i++) {
         SDL_SetRenderDrawColor(cat__g.renderer, 0, 0, 0, 255);
         SDL_RenderClear(cat__g.renderer);
         SDL_RenderPresent(cat__g.renderer);
     }
+    #endif
     cat__g.last_present_ms = SDL_GetTicks();
+    CAT__INIT_MARK(init_ms_sync);
 
     /* Load requested/env theme first, then last-used theme from state file,
        defaulting to "Catastrophe". */
@@ -6366,6 +6435,7 @@ int cat_init(cat_config *cfg) {
         cat_set_theme_color(cfg->primary_color_hex);
     }
     cat__apply_env_appearance_overrides();
+    CAT__INIT_MARK(init_ms_theme);
 
     /* Load fonts. Priority: env override > cfg override > theme's ui_font.path > fallback. */
     const char *font_path = cat__env_nonempty("CAT_FONT_PATH");
@@ -6380,6 +6450,7 @@ int cat_init(cat_config *cfg) {
         SDL_Quit();
         return CAT_ERROR;
     }
+    CAT__INIT_MARK(init_ms_fonts);
 
     /* Load background image (on by default unless disabled) */
     if (!cfg || !cfg->disable_background) {
@@ -6408,6 +6479,7 @@ int cat_init(cat_config *cfg) {
             }
         }
     }
+    CAT__INIT_MARK(init_ms_bg);
 
     /* Load status-bar / pill cap sprite sheet (icons + AA pill caps) */
     {
@@ -6429,6 +6501,7 @@ int cat_init(cat_config *cfg) {
             }
         }
     }
+    CAT__INIT_MARK(init_ms_assets);
 
     /* Always start the power-button handler on supported device ports. */
     #if defined(PLATFORM_MLP1)
@@ -6447,6 +6520,12 @@ int cat_init(cat_config *cfg) {
     }
 
     cat__g.initialized = true;
+    cat_log("cat_init timings: sdl=%u sdl_joy=%u ttf_img=%u window=%u "
+            "renderer=%u sync=%u theme=%u fonts=%u bg=%u assets=%u total=%u",
+            init_ms_sdl, init_ms_sdl_joy, init_ms_ttf_img,
+            init_ms_window, init_ms_renderer, init_ms_sync, init_ms_theme,
+            init_ms_fonts, init_ms_bg, init_ms_assets, SDL_GetTicks() - init_t0);
+    #undef CAT__INIT_MARK
     cat_log("Catastrophe initialized successfully");
 
     return CAT_OK;
