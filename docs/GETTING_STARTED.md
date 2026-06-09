@@ -355,7 +355,7 @@ This automatically adapts to the target screen resolution.
 Access current theme colors via `cat_get_theme()`:
 
 ```c
-ap_theme *t = cat_get_theme();
+cat_theme *t = cat_get_theme();
 cat_draw_rounded_rect(x, y, w, h, CAT_S(8), t->highlight);
 ```
 

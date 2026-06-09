@@ -380,7 +380,7 @@ Image sections are loaded once per detail-screen session and reused every frame 
 `cat_detail_screen()` exits with `CAT_DETAIL_BACK` on B, `CAT_DETAIL_ACTION` on A, and `CAT_DETAIL_SECONDARY_ACTION` on Y. Add a Y footer hint when you want the secondary action to be discoverable.
 
 ```c
-ap_color key_col = cat_get_theme()->text;
+cat_draw_color key_col = cat_get_theme()->text;
 cat_detail_opts opts = {
     .title                  = "Styled Detail",
     .sections               = sections,
@@ -415,8 +415,8 @@ cat_detail_opts opts = {
 
 **Usage**:
 ```c
-ap_color initial = { 255, 100, 50, 255 };
-ap_color result;
+cat_draw_color initial = { 255, 100, 50, 255 };
+cat_draw_color result;
 if (cat_color_picker(initial, &result) == CAT_OK) {
     // Use result.r, result.g, result.b
 }

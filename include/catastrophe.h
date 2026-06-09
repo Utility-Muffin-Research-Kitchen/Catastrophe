@@ -268,7 +268,7 @@ typedef struct {
  * Color Type — matches Allium's RGBA uint32 layout
  * ═══════════════════════════════════════════════════════════════════════════
  *
- * ap_color stores RGBA as a uint32_t:
+ * cat_color stores RGBA as a uint32_t:
  *   bits  0–7:  Red
  *   bits  8–15: Green
  *   bits 16–23: Blue
@@ -360,22 +360,26 @@ static inline SDL_Color cat_color_to_sdl(cat_color c) {
     return sdl;
 }
 
-/* Legacy alias — ap_color wraps SDL_Color for backward compat */
-typedef SDL_Color ap_color;
+/* Immediate drawing color. This intentionally remains SDL_Color-shaped while
+ * cat_color is the packed stylesheet/color-storage type above. */
+typedef SDL_Color cat_draw_color;
+
+/* Legacy alias retained for existing Apostrophe-era consumers. */
+typedef cat_draw_color ap_color;
 
 /* ═══════════════════════════════════════════════════════════════════════════
  * Theme — runtime theme struct populated from cat_stylesheet (6-color + font + bg)
  * ═══════════════════════════════════════════════════════════════════════════ */
 
-typedef struct {
-    ap_color highlight;         /* Selected item pill background */
-    ap_color accent;            /* Footer outer pill, status bar bg */
-    ap_color button_label;      /* Text inside footer button pills */
-    ap_color button_glyph_bg;   /* Inner A/B/X/Y pill background (defaults to highlight) */
-    ap_color text;              /* Default text color */
-    ap_color highlighted_text;  /* Text on highlighted/selected items */
-    ap_color hint;              /* Help text, dim text */
-    ap_color background;        /* Screen background color */
+typedef struct cat_theme {
+    cat_draw_color highlight;         /* Selected item pill background */
+    cat_draw_color accent;            /* Footer outer pill, status bar bg */
+    cat_draw_color button_label;      /* Text inside footer button pills */
+    cat_draw_color button_glyph_bg;   /* Inner A/B/X/Y pill background (defaults to highlight) */
+    cat_draw_color text;              /* Default text color */
+    cat_draw_color highlighted_text;  /* Text on highlighted/selected items */
+    cat_draw_color hint;              /* Help text, dim text */
+    cat_draw_color background;        /* Screen background color */
     char     font_path[512];    /* Primary font file path */
     char     bg_image_path[512];/* Background image path (PNG) */
     /* Pill geometry — sourced from cat_stylesheet.ui */
@@ -383,7 +387,10 @@ typedef struct {
     int      ui_padding_y;      /* Pill internal vertical padding (unscaled) */
     float    pill_radius_ratio; /* Corner radius as a fraction of pill height/2. 0=rectangle, 1=full cap. */
     int      pill_corner_mask;  /* Which corners round (CAT_CORNER_* bitmask). 0/ALL = all four (default). */
-} ap_theme;
+} cat_theme;
+
+/* Legacy alias retained for existing Apostrophe-era consumers. */
+typedef cat_theme ap_theme;
 
 /* ═══════════════════════════════════════════════════════════════════════════
  * Stylesheet — Allium theme data model (JSON-driven)
@@ -714,8 +721,8 @@ typedef struct {
     /* Scaling */
     float         scale_factor;
 
-    /* Theme (legacy) */
-    ap_theme      theme;
+    /* Runtime theme view derived from the active stylesheet. */
+    cat_theme     theme;
 
     /* Stylesheet (Allium 1:1) */
     cat_stylesheet stylesheet;
@@ -867,10 +874,10 @@ int            cat_font_size_for_resolution(int base_size);
  * Public API — Theming
  * ═══════════════════════════════════════════════════════════════════════════ */
 
-ap_theme            *cat_get_theme(void);
+cat_theme           *cat_get_theme(void);
 const cat_stylesheet *cat_get_stylesheet(void);
 int            cat_reload_background(const char *bg_path);
-ap_color       cat_hex_to_color(const char *hex);
+cat_draw_color cat_hex_to_color(const char *hex);
 void           cat_set_theme_color(const char *hex);
 /* Override the tab-bar text colors on the active stylesheet (inactive +
    selected). Lets the host map them onto its own palette roles. */
@@ -878,7 +885,7 @@ void           cat_set_tab_text_colors(cat_color inactive, cat_color selected);
 /* Derive the theme fields that aren't stored directly: selected-row text
    auto-contrasts against the selection pill, and the tab-bar text colors track
    the palette. Call after changing any of the color roles. NULL is a no-op. */
-void           cat_finalize_theme_colors(ap_theme *t);
+void           cat_finalize_theme_colors(cat_theme *t);
 
 /* ═══════════════════════════════════════════════════════════════════════════
  * Public API — Fonts
@@ -941,17 +948,17 @@ enum {
 void           cat_clear_screen(void);
 void           cat_present(void);
 void           cat_draw_background(void);
-void           cat_draw_rounded_rect(int x, int y, int w, int h, int r, ap_color c);
-void           cat_draw_rounded_rect_ex(int x, int y, int w, int h, int r, unsigned corners, ap_color c); /* round only the corners in the CAT_CORNER_* mask; others are square */
-void           cat_draw_pill(int x, int y, int w, int h, ap_color c);
-void           cat_draw_rect(int x, int y, int w, int h, ap_color c);
-void           cat_draw_circle(int cx, int cy, int r, ap_color c);
-void           cat_draw_star(int cx, int cy, int outer_r, ap_color c); /* filled 5-point star centered at (cx,cy) */
-void           cat_draw_triangle(int x, int y, int w, int h, cat_dir dir, ap_color c); /* solid triangle filling the box, pointing `dir` (cycler/affordance arrows) */
-int            cat_draw_text(TTF_Font *font, const char *text, int x, int y, ap_color color);          /* returns rendered width in pixels */
-int            cat_draw_text_clipped(TTF_Font *font, const char *text, int x, int y, ap_color color, int max_w); /* returns rendered width */
-int            cat_draw_text_ellipsized(TTF_Font *font, const char *text, int x, int y, ap_color color, int max_w); /* truncate with "..." if too wide */
-int            cat_draw_text_wrapped(TTF_Font *font, const char *text, int x, int y, int max_w, ap_color color, cat_text_align align); /* returns rendered height */
+void           cat_draw_rounded_rect(int x, int y, int w, int h, int r, cat_draw_color c);
+void           cat_draw_rounded_rect_ex(int x, int y, int w, int h, int r, unsigned corners, cat_draw_color c); /* round only the corners in the CAT_CORNER_* mask; others are square */
+void           cat_draw_pill(int x, int y, int w, int h, cat_draw_color c);
+void           cat_draw_rect(int x, int y, int w, int h, cat_draw_color c);
+void           cat_draw_circle(int cx, int cy, int r, cat_draw_color c);
+void           cat_draw_star(int cx, int cy, int outer_r, cat_draw_color c); /* filled 5-point star centered at (cx,cy) */
+void           cat_draw_triangle(int x, int y, int w, int h, cat_dir dir, cat_draw_color c); /* solid triangle filling the box, pointing `dir` (cycler/affordance arrows) */
+int            cat_draw_text(TTF_Font *font, const char *text, int x, int y, cat_draw_color color);          /* returns rendered width in pixels */
+int            cat_draw_text_clipped(TTF_Font *font, const char *text, int x, int y, cat_draw_color color, int max_w); /* returns rendered width */
+int            cat_draw_text_ellipsized(TTF_Font *font, const char *text, int x, int y, cat_draw_color color, int max_w); /* truncate with "..." if too wide */
+int            cat_draw_text_wrapped(TTF_Font *font, const char *text, int x, int y, int max_w, cat_draw_color color, cat_text_align align); /* returns rendered height */
 int            cat_measure_text(TTF_Font *font, const char *text);
 int            cat_measure_text_ellipsized(TTF_Font *font, const char *text, int max_w); /* measure width text would occupy when ellipsized to fit max_w */
 void           cat_draw_image(SDL_Texture *tex, int x, int y, int w, int h);
@@ -978,7 +985,7 @@ void           cat_set_tab_bar_reserved_right(int px);
 void           cat_draw_textured_parallelogram(SDL_Texture *tex,
                                                const SDL_FPoint quad[4],
                                                uint8_t alpha);
-void           cat_draw_progress_bar(int x, int y, int w, int h, float progress, ap_color fg, ap_color bg);
+void           cat_draw_progress_bar(int x, int y, int w, int h, float progress, cat_draw_color fg, cat_draw_color bg);
 SDL_Rect       cat_get_content_rect(bool has_title, bool has_footer, bool has_status_bar);
 
 /* ─── Box model ─────────────────────────────────────────────────────────────
@@ -1038,7 +1045,7 @@ typedef struct {
     cat_marquee_mode mode;       /* default 0 = loop */
 } cat_marquee;
 bool           cat_draw_text_marquee(TTF_Font *font, const char *text, int x, int y,
-                                     ap_color color, int visible_w,
+                                     cat_draw_color color, int visible_w,
                                      cat_marquee *m, uint32_t dt_ms);
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -1541,7 +1548,7 @@ bool cat_is_cancelled(int result) {
 
 /* ─── Color Utilities ────────────────────────────────────────────────────── */
 
-ap_color cat_hex_to_color(const char *hex) {
+cat_draw_color cat_hex_to_color(const char *hex) {
     return cat_color_to_sdl(cat_color_from_hex(hex));
 }
 
@@ -1556,7 +1563,7 @@ void cat_set_tab_text_colors(cat_color inactive, cat_color selected) {
     cat__g.stylesheet.ui.tab_selected_color = selected;
 }
 
-void cat_finalize_theme_colors(ap_theme *t) {
+void cat_finalize_theme_colors(cat_theme *t) {
     if (!t) return;
 
     int hl_lum = (t->highlight.r * 299 + t->highlight.g * 587 + t->highlight.b * 114) / 1000;
@@ -1568,7 +1575,7 @@ void cat_finalize_theme_colors(ap_theme *t) {
 }
 
 static void cat__apply_env_appearance_overrides(void) {
-    ap_theme *t = &cat__g.theme;
+    cat_theme *t = &cat__g.theme;
     const char *hex;
     float radius = 0.0f;
     int corner_mask = 0;
@@ -1612,7 +1619,7 @@ static void cat__stylesheet_font_init_default(cat_stylesheet_font *f) {
 
 static void cat__stylesheet_ui_init_default(cat_stylesheet_ui *ui) {
     /* Apostrophe-parity defaults: white selection pill on black background, black text on
-       the pill. These match the legacy ap_theme at first launch with no on-disk stylesheet. */
+       the pill. These match the historical runtime theme at first launch with no on-disk stylesheet. */
     ui->margin_x = 12;
     ui->margin_y = 8;
     ui->list_margin = 4;
@@ -2000,7 +2007,7 @@ int cat_stylesheet_load_theme(cat_stylesheet *s, const char *theme_name) {
     return CAT_OK;
 }
 
-static void cat__stylesheet_to_ap_theme(const cat_stylesheet *s, ap_theme *t) {
+static void cat__stylesheet_to_theme(const cat_stylesheet *s, cat_theme *t) {
     t->highlight        = cat_color_to_sdl(s->ui.highlight_color);
     /* Accent (used for footer button-hint pills, section titles, queue/progress fills) is
        sourced from button_hints.button_a_color — the closest Allium analogue to a single
@@ -2044,7 +2051,7 @@ int cat_stylesheet_apply(cat_stylesheet *s) {
        launcher read `launcher.layout`, `tab_color`, etc. from this. */
     cat__g.stylesheet = *s;
 
-    cat__stylesheet_to_ap_theme(s, &cat__g.theme);
+    cat__stylesheet_to_theme(s, &cat__g.theme);
 
     /* Font path is stored but NOT reloaded here — TTF_CloseFont/OpenFont
        cycle mid-execution causes segfaults. Font changes take effect on restart. */
@@ -2264,7 +2271,7 @@ int cat_theme_state_save(const char *theme_name) {
 
 /* ─── Theme Loading ──────────────────────────────────────────────────────── */
 
-ap_theme *cat_get_theme(void) {
+cat_theme *cat_get_theme(void) {
     return &cat__g.theme;
 }
 
@@ -3370,7 +3377,7 @@ bool cat_poll_combo(cat_combo_event *event) {
 
 void cat_clear_screen(void) {
     cat__footer_overflow_begin_frame();
-    ap_color bg = cat__g.theme.background;
+    cat_draw_color bg = cat__g.theme.background;
     SDL_SetRenderDrawColor(cat__g.renderer, bg.r, bg.g, bg.b, bg.a);
     SDL_RenderClear(cat__g.renderer);
 }
@@ -3538,7 +3545,7 @@ static void cat__fill_circle_quadrant(int cx, int cy, int r, int quadrant) {
     }
 }
 
-void cat_draw_rounded_rect_ex(int x, int y, int w, int h, int r, unsigned corners, ap_color c) {
+void cat_draw_rounded_rect_ex(int x, int y, int w, int h, int r, unsigned corners, cat_draw_color c) {
     SDL_Renderer *rend = cat__g.renderer;
     if (r > h / 2) r = h / 2;
     if (r > w / 2) r = w / 2;
@@ -3598,11 +3605,11 @@ void cat_draw_rounded_rect_ex(int x, int y, int w, int h, int r, unsigned corner
     if (round_br) cat__fill_circle_quadrant(x + w - r, y + h - r, r, 3); else { SDL_Rect q = { x + w - r, y + h - r, r, r }; SDL_RenderFillRect(rend, &q); }
 }
 
-void cat_draw_rounded_rect(int x, int y, int w, int h, int r, ap_color c) {
+void cat_draw_rounded_rect(int x, int y, int w, int h, int r, cat_draw_color c) {
     cat_draw_rounded_rect_ex(x, y, w, h, r, CAT_CORNER_ALL, c);
 }
 
-void cat_draw_pill(int x, int y, int w, int h, ap_color c) {
+void cat_draw_pill(int x, int y, int w, int h, cat_draw_color c) {
     /* Pill shape is themed: the active stylesheet's ui.pill_radius_ratio scales the corner
        radius (0 = sharp rectangle, 1 = full half-cap circle). The pre-rendered sprite has
        fixed full-cap geometry, so we only take the sprite path at ratio == 1.0; any other
@@ -3660,13 +3667,13 @@ void cat_draw_pill(int x, int y, int w, int h, ap_color c) {
     cat_draw_rounded_rect(x, y, w, h, r, c);
 }
 
-void cat_draw_rect(int x, int y, int w, int h, ap_color c) {
+void cat_draw_rect(int x, int y, int w, int h, cat_draw_color c) {
     SDL_SetRenderDrawColor(cat__g.renderer, c.r, c.g, c.b, c.a);
     SDL_Rect r = {x, y, w, h};
     SDL_RenderFillRect(cat__g.renderer, &r);
 }
 
-void cat_draw_circle(int cx, int cy, int r, ap_color c) {
+void cat_draw_circle(int cx, int cy, int r, cat_draw_color c) {
     SDL_SetRenderDrawColor(cat__g.renderer, c.r, c.g, c.b, c.a);
     for (int dy = -r; dy <= r; dy++) {
         int dx = (int)(sqrtf((float)(r * r - dy * dy)) + 0.5f);
@@ -3674,7 +3681,7 @@ void cat_draw_circle(int cx, int cy, int r, ap_color c) {
     }
 }
 
-void cat_draw_star(int cx, int cy, int outer_r, ap_color c) {
+void cat_draw_star(int cx, int cy, int outer_r, cat_draw_color c) {
     if (outer_r < 1) return;
 
     /* Filled 5-point star as a triangle fan: a center vertex plus 10 perimeter
@@ -3710,7 +3717,7 @@ void cat_draw_star(int cx, int cy, int outer_r, ap_color c) {
                        indices, 3 * CAT__STAR_PERIM);
 }
 
-int cat_draw_text(TTF_Font *font, const char *text, int x, int y, ap_color color) {
+int cat_draw_text(TTF_Font *font, const char *text, int x, int y, cat_draw_color color) {
     if (!font || !text || !text[0]) return 0;
 
     SDL_Surface *surf = TTF_RenderUTF8_Blended(font, text, color);
@@ -3728,7 +3735,7 @@ int cat_draw_text(TTF_Font *font, const char *text, int x, int y, ap_color color
     return w;
 }
 
-int cat_draw_text_clipped(TTF_Font *font, const char *text, int x, int y, ap_color color, int max_w) {
+int cat_draw_text_clipped(TTF_Font *font, const char *text, int x, int y, cat_draw_color color, int max_w) {
     if (!font || !text || !text[0]) return 0;
     if (max_w <= 0) return cat_draw_text(font, text, x, y, color);
 
@@ -3751,7 +3758,7 @@ int cat_draw_text_clipped(TTF_Font *font, const char *text, int x, int y, ap_col
     return orig_w;
 }
 
-int cat_draw_text_ellipsized(TTF_Font *font, const char *text, int x, int y, ap_color color, int max_w) {
+int cat_draw_text_ellipsized(TTF_Font *font, const char *text, int x, int y, cat_draw_color color, int max_w) {
     if (!font || !text || !text[0]) return 0;
     if (max_w <= 0) return cat_draw_text(font, text, x, y, color);
 
@@ -3862,7 +3869,7 @@ int cat_measure_text_ellipsized(TTF_Font *font, const char *text, int max_w) {
     return result_w;
 }
 
-int cat_draw_text_wrapped(TTF_Font *font, const char *text, int x, int y, int max_w, ap_color color, cat_text_align align) {
+int cat_draw_text_wrapped(TTF_Font *font, const char *text, int x, int y, int max_w, cat_draw_color color, cat_text_align align) {
     if (!font || !text || !text[0] || max_w <= 0) return 0;
 
     /* Word wrap: break text into lines that fit within max_w */
@@ -4202,7 +4209,7 @@ void cat_draw_image_rounded_ex(SDL_Texture *tex, int x, int y, int w, int h,
     SDL_SetRenderDrawBlendMode(rend, mask_blend);
     if (cat__g.status_assets) SDL_SetTextureBlendMode(cat__g.status_assets, mask_blend);
 
-    ap_color white = { 255, 255, 255, 255 };
+    cat_draw_color white = { 255, 255, 255, 255 };
     cat_draw_rounded_rect_ex(0, 0, w, h, r, corners, white);
 
     SDL_SetRenderDrawBlendMode(rend, saved_draw_bm);
@@ -4233,19 +4240,19 @@ void cat_draw_scrollbar(int x, int y, int h, int visible, int total, int offset)
     int thumb_y = y + (offset * (track_h - thumb_h)) / (total - visible);
 
     /* Track */
-    ap_color track_color = cat__g.theme.hint;
+    cat_draw_color track_color = cat__g.theme.hint;
     track_color.a = 40;
     cat_draw_rounded_rect(x, y, bar_w, track_h, bar_w / 2, track_color);
 
     /* Thumb */
-    ap_color thumb_color = cat__g.theme.hint;
+    cat_draw_color thumb_color = cat__g.theme.hint;
     thumb_color.a = 120;
     cat_draw_rounded_rect(x, thumb_y, bar_w, thumb_h, bar_w / 2, thumb_color);
 
     SDL_SetRenderDrawBlendMode(rend, prev_blend);
 }
 
-void cat_draw_progress_bar(int x, int y, int w, int h, float progress, ap_color fg, ap_color bg) {
+void cat_draw_progress_bar(int x, int y, int w, int h, float progress, cat_draw_color fg, cat_draw_color bg) {
     /* Background track */
     cat_draw_rounded_rect(x, y, w, h, h / 2, bg);
 
@@ -4301,7 +4308,7 @@ void cat_text_scroll_reset(cat_text_scroll *s) {
 }
 
 bool cat_draw_text_marquee(TTF_Font *font, const char *text, int x, int y,
-                           ap_color color, int visible_w,
+                           cat_draw_color color, int visible_w,
                            cat_marquee *m, uint32_t dt_ms) {
     if (!font || !text) return false;
 
@@ -4736,7 +4743,7 @@ static void cat__footer_overflow_show_hidden_actions(void) {
 
     cat__g.footer_overflow_overlay_open = true;
 
-    ap_theme *theme = cat_get_theme();
+    cat_theme *theme = cat_get_theme();
     int screen_w = cat_get_screen_width();
     int screen_h = cat_get_screen_height();
     int margin = CAT_S(40);
@@ -4775,7 +4782,7 @@ static void cat__footer_overflow_show_hidden_actions(void) {
             }
         }
 
-        ap_color overlay_bg = {0, 0, 0, 220};
+        cat_draw_color overlay_bg = {0, 0, 0, 220};
         cat_draw_rect(0, 0, screen_w, screen_h, overlay_bg);
 
         if (title_font) {
@@ -5336,7 +5343,7 @@ cache:
    src_x/y/w/h are at 1x scale; they are multiplied by status_asset_scale. */
 static void cat__blit_status_icon(int src_x, int src_y, int src_w, int src_h,
                                   int dst_x, int dst_y, int dst_w, int dst_h,
-                                  ap_color tint) {
+                                  cat_draw_color tint) {
     if (!cat__g.status_assets) return;
     int s = cat__g.status_asset_scale;
     SDL_Rect src = { src_x * s, src_y * s, src_w * s, src_h * s };
@@ -5548,8 +5555,8 @@ static void cat__draw_status_bar_battery_sprite(int x, int y, TTF_Font *font) {
     /* Interior cavity for the fill bar. The terminal nub shifts the interior left
        by ~1px, so the bar sits at +2 (not +3) to stay centered. */
     int cav_x = x + 2 * s, cav_y = y + 2 * s, cav_w = 12 * s, cav_h = 6 * s;
-    ap_color charge_green = { 0x4C, 0xD9, 0x64, 0xFF };
-    ap_color low_red      = { 0xFF, 0x3B, 0x30, 0xFF };
+    cat_draw_color charge_green = { 0x4C, 0xD9, 0x64, 0xFF };
+    cat_draw_color low_red      = { 0xFF, 0x3B, 0x30, 0xFF };
 
     if (charging) {
         cat__blit_status_icon(47, 51, CAT__BATTERY_W, CAT__BATTERY_H,
@@ -5580,7 +5587,7 @@ static void cat__draw_status_bar_battery_sprite(int x, int y, TTF_Font *font) {
     if (low) {
         /* Flash the battery red when critically low (~0.6s on, 0.6s normal). */
         bool on = (SDL_GetTicks() % 1200u) < 700u;
-        ap_color frame_c = on ? low_red : cat__g.theme.hint;
+        cat_draw_color frame_c = on ? low_red : cat__g.theme.hint;
         cat__blit_status_icon(66, 51, CAT__BATTERY_W, CAT__BATTERY_H,
                              x, y, iw, ih, frame_c);
         if (on && bat > 0) {
@@ -6478,7 +6485,7 @@ void cat_set_tab_bar_reserved_right(int px) {
 
 /* Filled triangle via SDL_RenderGeometry (no glyph needed), like cat_draw_star. */
 static void cat__fill_triangle(float ax, float ay, float bx, float by,
-                               float cx, float cy, ap_color c) {
+                               float cx, float cy, cat_draw_color c) {
     SDL_Color col = { c.r, c.g, c.b, c.a };
     SDL_Vertex v[3];
     v[0].position = (SDL_FPoint){ ax, ay }; v[0].color = col; v[0].tex_coord = (SDL_FPoint){ 0, 0 };
@@ -6488,7 +6495,7 @@ static void cat__fill_triangle(float ax, float ay, float bx, float by,
     SDL_RenderGeometry(cat__g.renderer, NULL, v, 3, idx, 3);
 }
 
-void cat_draw_triangle(int x, int y, int w, int h, cat_dir dir, ap_color c) {
+void cat_draw_triangle(int x, int y, int w, int h, cat_dir dir, cat_draw_color c) {
     if (w <= 0 || h <= 0) return;
     float l = (float)x, t = (float)y, r = (float)(x + w), b = (float)(y + h);
     float mid_x = (float)x + (float)w * 0.5f;
@@ -6504,8 +6511,8 @@ void cat_draw_triangle(int x, int y, int w, int h, cat_dir dir, ap_color c) {
 void cat_draw_tab_bar(const char *const *labels, int count, int active_index) {
     if (!labels || count <= 0) return;
     TTF_Font *font    = cat_get_font(CAT_FONT_SMALL);
-    ap_color active_c = cat_color_to_sdl(cat__g.stylesheet.ui.tab_selected_color);
-    ap_color inact_c  = cat_color_to_sdl(cat__g.stylesheet.ui.tab_color);
+    cat_draw_color active_c = cat_color_to_sdl(cat__g.stylesheet.ui.tab_selected_color);
+    cat_draw_color inact_c  = cat_color_to_sdl(cat__g.stylesheet.ui.tab_color);
 
     int sw     = cat_get_screen_width();
     int bar_h  = cat_get_tab_bar_height();

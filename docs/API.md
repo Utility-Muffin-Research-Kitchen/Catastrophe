@@ -127,7 +127,7 @@ CAT_ACTION_OPTION_CHANGED   // Options list standard value changed
 CAT_ACTION_CUSTOM    // Alias of CAT_ACTION_TRIGGERED (backward compatibility)
 ```
 
-#### `cat_color` and `ap_color`
+#### `cat_color`, `cat_draw_color`, and `ap_color`
 
 `cat_color` is a packed `uint32_t` in Catastrophe/Allium RGBA layout:
 
@@ -142,33 +142,45 @@ typedef uint32_t cat_color;
 
 Use `cat_color_rgb()`, `cat_color_rgba()`, `cat_color_from_hex()`,
 `cat_color_to_hex()`, `cat_color_blend()`, and `cat_color_to_sdl()` for packed
-stylesheet colors. `ap_color` is the legacy rendering alias for `SDL_Color` and
-is still used by the immediate drawing APIs and `ap_theme`.
+stylesheet colors.
 
-#### `ap_theme`
+`cat_draw_color` is the immediate drawing color. It has the same shape as
+`SDL_Color`:
 
 ```c
-typedef struct {
-    ap_color highlight;         // Selected item pill background
-    ap_color accent;            // Footer outer pill, status bar bg
-    ap_color button_label;      // Text inside footer button pills
-    ap_color button_glyph_bg;   // Inner A/B/X/Y glyph pill background
-    ap_color text;              // Default text color
-    ap_color highlighted_text;  // Text on selected items
-    ap_color hint;              // Dim/help text
-    ap_color background;        // Screen background
+typedef SDL_Color cat_draw_color;
+typedef cat_draw_color ap_color;  // Legacy compatibility alias
+```
+
+New Catastrophe consumers should prefer `cat_draw_color`; `ap_color` remains as
+a compatibility spelling for Apostrophe-era code and some existing widget APIs.
+
+#### `cat_theme` and `ap_theme`
+
+```c
+typedef struct cat_theme {
+    cat_draw_color highlight;         // Selected item pill background
+    cat_draw_color accent;            // Footer outer pill, status bar bg
+    cat_draw_color button_label;      // Text inside footer button pills
+    cat_draw_color button_glyph_bg;   // Inner A/B/X/Y glyph pill background
+    cat_draw_color text;              // Default text color
+    cat_draw_color highlighted_text;  // Text on selected items
+    cat_draw_color hint;              // Dim/help text
+    cat_draw_color background;        // Screen background
     char     font_path[512];
     char     bg_image_path[512];
     int      ui_padding_x;
     int      ui_padding_y;
     float    pill_radius_ratio;
     int      pill_corner_mask;  // CAT_CORNER_* bitmask
-} ap_theme;
+} cat_theme;
+
+typedef cat_theme ap_theme;  // Legacy compatibility alias
 ```
 
-This runtime theme type is named `ap_theme` for backward compatibility;
-`cat_get_theme()` returns `ap_theme *`. Stylesheet APIs use packed `cat_color`
+`cat_get_theme()` returns `cat_theme *`. Stylesheet APIs use packed `cat_color`
 values and convert them into this draw-time theme with `cat_stylesheet_apply()`.
+`ap_theme` remains as a compatibility alias.
 
 #### `cat_config`
 
@@ -344,7 +356,7 @@ int margin = CAT_S(20);  // 20px * scale factor
 
 ### Theming
 
-#### `ap_theme *cat_get_theme(void)`
+#### `cat_theme *cat_get_theme(void)`
 
 Get a pointer to the current theme. Modifiable.
 
@@ -353,9 +365,10 @@ Get a pointer to the current theme. Modifiable.
 Get the active stylesheet snapshot. The returned pointer is owned by
 Catastrophe and remains valid until the next stylesheet apply or quit.
 
-#### `ap_color cat_hex_to_color(const char *hex)`
+#### `cat_draw_color cat_hex_to_color(const char *hex)`
 
-Parse a `#RRGGBB` hex string and return the corresponding `ap_color` (with alpha 255). Returns black `{0,0,0,255}` on invalid input.
+Parse a `#RRGGBB` hex string and return the corresponding `cat_draw_color`
+(with alpha 255). Returns black `{0,0,0,255}` on invalid input.
 
 #### `void cat_set_theme_color(const char *hex)`
 
@@ -366,7 +379,7 @@ Parse a `#RRGGBB` string and apply it as the theme accent color: `cat_set_theme_
 Override tab-bar inactive and selected text colors on the active stylesheet.
 This lets host launchers map tab text onto their own palette roles.
 
-#### `void cat_finalize_theme_colors(ap_theme *theme)`
+#### `void cat_finalize_theme_colors(cat_theme *theme)`
 
 Recompute derived theme colors after direct theme mutation. The selected-row
 text color auto-contrasts against the highlight pill, and tab text colors track
@@ -394,7 +407,7 @@ the checked-out `themes/Allium-Themes/Themes` tree, and platform runtime theme
 paths. On MLP1, the platform theme path is
 `/mnt/sdcard/umrk-launcher/res/themes` unless `UMRK_LAUNCHER_PATH` overrides
 the launcher root. `cat_stylesheet_apply()` stores the active stylesheet,
-updates the runtime `ap_theme`, reloads fonts/backgrounds as needed, and makes
+updates the runtime `cat_theme`, reloads fonts/backgrounds as needed, and makes
 `cat_get_stylesheet()` reflect the new state.
 
 Use the matching free helpers for lists returned by
@@ -496,19 +509,19 @@ Schedule a redraw in the future while the UI is otherwise idle. This is useful f
 
 Draw the background image/color (called automatically by `cat_clear_screen`).
 
-#### `int cat_draw_text(TTF_Font *font, const char *text, int x, int y, ap_color color)`
+#### `int cat_draw_text(TTF_Font *font, const char *text, int x, int y, cat_draw_color color)`
 
 Render text. Returns the rendered width in pixels.
 
-#### `int cat_draw_text_clipped(TTF_Font *font, const char *text, int x, int y, ap_color color, int max_w)`
+#### `int cat_draw_text_clipped(TTF_Font *font, const char *text, int x, int y, cat_draw_color color, int max_w)`
 
 Render text clipped to a maximum width. Performs a hard pixel clip with no truncation indicator.
 
-#### `int cat_draw_text_ellipsized(TTF_Font *font, const char *text, int x, int y, ap_color color, int max_w)`
+#### `int cat_draw_text_ellipsized(TTF_Font *font, const char *text, int x, int y, cat_draw_color color, int max_w)`
 
 Render text truncated with "..." if it exceeds `max_w`. If the text fits, it is rendered normally. Uses a binary search to find the longest prefix that fits alongside the ellipsis, respecting UTF-8 character boundaries. Returns the rendered width in pixels.
 
-#### `int cat_draw_text_wrapped(TTF_Font *font, const char *text, int x, int y, int max_w, ap_color color, cat_text_align align)`
+#### `int cat_draw_text_wrapped(TTF_Font *font, const char *text, int x, int y, int max_w, cat_draw_color color, cat_text_align align)`
 
 Render multi-line word-wrapped text and return the rendered height.
 
@@ -524,33 +537,33 @@ Measure the width the text would occupy if ellipsized to fit `max_w`, without re
 
 Measure the total height in pixels that word-wrapped text would occupy at the given `max_w` constraint, without rendering. Useful for pre-calculating layout sizes.
 
-#### `void cat_draw_rect(int x, int y, int w, int h, ap_color color)`
+#### `void cat_draw_rect(int x, int y, int w, int h, cat_draw_color color)`
 
 Draw a filled rectangle.
 
-#### `void cat_draw_pill(int x, int y, int w, int h, ap_color color)`
+#### `void cat_draw_pill(int x, int y, int w, int h, cat_draw_color color)`
 
 Draw a pill shape (fully rounded rectangle where corner radius = h/2). Uses the pre-rendered pill sprite when status assets are loaded; otherwise falls back to procedural drawing.
 
-#### `void cat_draw_rounded_rect(int x, int y, int w, int h, int radius, ap_color color)`
+#### `void cat_draw_rounded_rect(int x, int y, int w, int h, int radius, cat_draw_color color)`
 
 Draw a filled rounded rectangle with arbitrary corner radius using scanline quarter-circle fill with sub-pixel anti-aliasing (no SDL2_gfx dependency).
 
-#### `void cat_draw_rounded_rect_ex(int x, int y, int w, int h, int radius, unsigned corners, ap_color color)`
+#### `void cat_draw_rounded_rect_ex(int x, int y, int w, int h, int radius, unsigned corners, cat_draw_color color)`
 
 Draw a filled rounded rectangle while rounding only the corners in the
 `CAT_CORNER_TL`, `CAT_CORNER_TR`, `CAT_CORNER_BL`, `CAT_CORNER_BR` bitmask.
 `CAT_CORNER_ALL` rounds all four corners.
 
-#### `void cat_draw_circle(int cx, int cy, int r, ap_color color)`
+#### `void cat_draw_circle(int cx, int cy, int r, cat_draw_color color)`
 
 Draw a filled circle at center (cx, cy) with radius r.
 
-#### `void cat_draw_star(int cx, int cy, int outer_r, ap_color color)`
+#### `void cat_draw_star(int cx, int cy, int outer_r, cat_draw_color color)`
 
 Draw a filled five-point star.
 
-#### `void cat_draw_triangle(int x, int y, int w, int h, cat_dir dir, ap_color color)`
+#### `void cat_draw_triangle(int x, int y, int w, int h, cat_dir dir, cat_draw_color color)`
 
 Draw a filled triangle inside the given rectangle, pointing `CAT_DIR_LEFT`,
 `CAT_DIR_RIGHT`, `CAT_DIR_UP`, or `CAT_DIR_DOWN`.
@@ -573,7 +586,7 @@ Load an image from disk (PNG, JPG) and return an SDL_Texture. Returns NULL on fa
 
 Draw a vertical scrollbar track and thumb. The thumb size and position are computed from visible/total/offset. Does nothing if total <= visible.
 
-#### `void cat_draw_progress_bar(int x, int y, int w, int h, float progress, ap_color fg, ap_color bg)`
+#### `void cat_draw_progress_bar(int x, int y, int w, int h, float progress, cat_draw_color fg, cat_draw_color bg)`
 
 Draw a rounded progress bar. `progress` is clamped to 0.0–1.0.
 
@@ -769,7 +782,7 @@ typedef struct {
 } cat_marquee;
 
 bool cat_draw_text_marquee(TTF_Font *font, const char *text, int x, int y,
-                           ap_color color, int visible_w,
+                           cat_draw_color color, int visible_w,
                            cat_marquee *m, uint32_t dt_ms);
 ```
 
@@ -1384,7 +1397,7 @@ typedef struct {
     ...
     bool        center_title;
     bool        show_section_separator;
-    const ap_color *key_color;
+    const cat_draw_color *key_color;
     TTF_Font   *body_font;           // Override body/value text (default: CAT_FONT_TINY)
     TTF_Font   *section_title_font;  // Override section headers (default: CAT_FONT_SMALL)
     TTF_Font   *key_font;            // Override info-pair key text (default: CAT_FONT_TINY)
@@ -1559,8 +1572,8 @@ typedef struct {
 ### Color Picker
 
 ```c
-int cat_color_picker(ap_color initial, ap_color *result);
-int cat_color_picker_ctx(ap_color initial, ap_color *result,
+int cat_color_picker(cat_draw_color initial, cat_draw_color *result);
+int cat_color_picker_ctx(cat_draw_color initial, cat_draw_color *result,
                          cat_color_picker_context *context);
 ```
 
@@ -1570,7 +1583,7 @@ int cat_color_picker_ctx(ap_color initial, ap_color *result,
 
 ```c
 typedef struct {
-    struct { const char *label; ap_color color; } roles[8];
+    struct { const char *label; cat_draw_color color; } roles[8];
     int role_count;
     int active_role;   /* -1 = none */
 } cat_color_picker_context;

@@ -345,7 +345,7 @@ static void demo_reorder(void) {
  *  Demo: Options list (settings-style)
  * ═══════════════════════════════════════════════════════════════════════════ */
 static void demo_options_list(void) {
-    ap_color orig_accent = cat_get_theme()->accent;
+    cat_draw_color orig_accent = cat_get_theme()->accent;
     char orig_hex[8];
     char accent_hex[8];
 
@@ -1134,7 +1134,7 @@ static void demo_detail_styled(void) {
         { .button = CAT_BTN_A, .label = "ACTION", .is_confirm = true },
     };
 
-    ap_color key_col = cat_get_theme()->text;
+    cat_draw_color key_col = cat_get_theme()->text;
 
     cat_detail_opts opts = {
         .title                  = "Styled Detail",
@@ -1385,10 +1385,10 @@ static void demo_process_advanced(void) {
 static void demo_drawing_primitives(void) {
     TTF_Font *body_font  = cat_get_font(CAT_FONT_LARGE);
     TTF_Font *small_font = cat_get_font(CAT_FONT_SMALL);
-    ap_theme *theme = cat_get_theme();
-    ap_color fg     = theme->text;
-    ap_color accent = theme->accent;
-    ap_color hint   = theme->hint;
+    cat_theme *theme = cat_get_theme();
+    cat_draw_color fg     = theme->text;
+    cat_draw_color accent = theme->accent;
+    cat_draw_color hint   = theme->hint;
 
     int screen_w = cat_get_screen_width();
     int pad = CAT_DS(12);
@@ -1563,7 +1563,7 @@ static void demo_drawing_primitives(void) {
             y += CAT_DS(16);
             anim_progress += 0.005f;
             if (anim_progress > 1.0f) anim_progress = 0.0f;
-            ap_color bar_bg = { hint.r, hint.g, hint.b, 80 };
+            cat_draw_color bar_bg = { hint.r, hint.g, hint.b, 80 };
             cat_draw_progress_bar(content_x, y, content_w, CAT_DS(16), anim_progress, accent, bar_bg);
             y += CAT_DS(30);
 
@@ -1656,10 +1656,10 @@ static void demo_drawing_primitives(void) {
 static void demo_screen_fade(void) {
     TTF_Font *title_font = cat_get_font(CAT_FONT_EXTRA_LARGE);
     TTF_Font *body_font  = cat_get_font(CAT_FONT_LARGE);
-    ap_theme *theme = cat_get_theme();
+    cat_theme *theme = cat_get_theme();
 
-    ap_color fg   = theme->text;
-    ap_color hint = theme->hint;
+    cat_draw_color fg   = theme->text;
+    cat_draw_color hint = theme->hint;
     cat_status_bar_opts status_bar = {
         .show_clock = CAT_CLOCK_SHOW,
         .use_24h    = true,
@@ -1999,11 +1999,11 @@ static void demo_screen_fade(void) {
 static void demo_input_theme(void) {
     TTF_Font *body_font  = cat_get_font(CAT_FONT_LARGE);
     TTF_Font *small_font = cat_get_font(CAT_FONT_SMALL);
-    ap_theme *theme = cat_get_theme();
-    ap_color fg = theme->text;
+    cat_theme *theme = cat_get_theme();
+    cat_draw_color fg = theme->text;
 
     /* Save original accent to restore on exit */
-    ap_color orig_accent = theme->accent;
+    cat_draw_color orig_accent = theme->accent;
     char orig_hex[8];
     snprintf(orig_hex, sizeof(orig_hex), "#%02X%02X%02X",
              orig_accent.r, orig_accent.g, orig_accent.b);
@@ -2143,7 +2143,7 @@ static void demo_input_theme(void) {
         SDL_RenderSetClipRect(cat_get_renderer(), &page_clip);
 
         int y = content_rect.y - scroll_offset;
-        ap_color col = (sel == 0) ? cat_get_theme()->accent : fg;
+        cat_draw_color col = (sel == 0) ? cat_get_theme()->accent : fg;
         char line[128];
 
         /* Input delay */
@@ -2166,7 +2166,7 @@ static void demo_input_theme(void) {
         cat_draw_text_clipped(body_font, line, content_x, y + row_y[3], col, content_w);
 
         /* Draw color swatch below the theme row */
-        ap_color swatch = cat_hex_to_color(colors[color_idx].hex);
+        cat_draw_color swatch = cat_hex_to_color(colors[color_idx].hex);
         cat_draw_rounded_rect(content_x + CAT_DS(20), y + row_y[3] + row_gap,
                              CAT_DS(100), CAT_DS(30), CAT_DS(6), swatch);
 
@@ -2202,8 +2202,8 @@ static void demo_input_theme(void) {
 static void demo_catastrophe_themes(void) {
     TTF_Font *body_font  = cat_get_font(CAT_FONT_LARGE);
     TTF_Font *small_font = cat_get_font(CAT_FONT_SMALL);
-    ap_theme *theme = cat_get_theme();
-    ap_color fg = theme->text;
+    cat_theme *theme = cat_get_theme();
+    cat_draw_color fg = theme->text;
 
     const char **theme_names = NULL;
     int theme_count = 0;
@@ -2443,7 +2443,7 @@ static void demo_catastrophe_themes(void) {
         int row_gap = CAT_DS(30);
         int y = content_rect.y;
 
-        ap_color col;
+        cat_draw_color col;
 
         /* Theme selector */
         col = (sel == 0) ? cat_get_theme()->accent : fg;
@@ -2608,8 +2608,8 @@ static void demo__cpu_pick_fan(void) {
 static void demo_cpu_fan(void) {
     TTF_Font *body_font  = cat_get_font(CAT_FONT_LARGE);
     TTF_Font *hint_font  = cat_get_font(CAT_FONT_SMALL);
-    ap_color fg     = cat_get_theme()->text;
-    ap_color accent = cat_get_theme()->accent;
+    cat_draw_color fg     = cat_get_theme()->text;
+    cat_draw_color accent = cat_get_theme()->accent;
     int pad = CAT_DS(12);
 
     static const struct { const char *label; void (*fn)(void); } actions[] = {
@@ -2682,7 +2682,7 @@ static void demo_cpu_fan(void) {
         cat_draw_text(hint_font, "Actions:", pad, y, fg);
         y += CAT_DS(20);
         for (int i = 0; i < action_count; i++) {
-            ap_color col = (i == sel) ? accent : fg;
+            cat_draw_color col = (i == sel) ? accent : fg;
             char line[64];
             snprintf(line, sizeof(line), "%s %s", (i == sel) ? ">" : " ", actions[i].label);
             cat_draw_text(body_font, line, pad, y, col);
@@ -2699,8 +2699,8 @@ static void demo_cpu_fan(void) {
  *  Demo: Color Picker
  * ═══════════════════════════════════════════════════════════════════════════ */
 static void demo_color_picker(void) {
-    ap_color initial = { .r = 100, .g = 149, .b = 237, .a = 255 }; /* Cornflower blue */
-    ap_color result;
+    cat_draw_color initial = { .r = 100, .g = 149, .b = 237, .a = 255 }; /* Cornflower blue */
+    cat_draw_color result;
 
     int rc = cat_color_picker(initial, &result);
 

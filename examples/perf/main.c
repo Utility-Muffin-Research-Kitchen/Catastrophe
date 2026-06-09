@@ -22,8 +22,8 @@
 
 static TTF_Font *g_body_font;
 static TTF_Font *g_hint_font;
-static ap_color  g_fg;
-static ap_color  g_accent;
+static cat_draw_color  g_fg;
+static cat_draw_color  g_accent;
 static int       g_sw, g_sh, g_pad;
 
 static void init_render_state(void) {
@@ -110,7 +110,7 @@ static void run_cpu_screen(void) {
         y += CAT_DS(20);
 
         for (int i = 0; i < CPU_PRESET_COUNT; i++) {
-            ap_color col = (i == sel) ? g_accent : g_fg;
+            cat_draw_color col = (i == sel) ? g_accent : g_fg;
             char line[128];
             snprintf(line, sizeof(line), "%s %s",
                      (i == sel) ? ">" : " ", g_cpu_presets[i].label);
@@ -289,7 +289,7 @@ int main(int argc, char *argv[]) {
         cat_draw_text(g_hint_font, "Actions:", g_pad, y, g_fg);
         y += CAT_DS(20);
         for (int i = 0; i < ACTION_COUNT; i++) {
-            ap_color col = (i == sel) ? g_accent : g_fg;
+            cat_draw_color col = (i == sel) ? g_accent : g_fg;
             char line[64];
             snprintf(line, sizeof(line), "%s %s", (i == sel) ? ">" : " ", g_actions[i].label);
             cat_draw_text(g_body_font, line, g_pad, y, col);

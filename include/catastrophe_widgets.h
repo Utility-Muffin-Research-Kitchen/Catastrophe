@@ -303,7 +303,7 @@ typedef struct {
     cat_status_bar_opts *status_bar;
     bool               center_title;           /* Center the screen title (default: left-aligned) */
     bool               show_section_separator;  /* Draw accent line under section headers (default: off) */
-    const ap_color    *key_color;              /* Override info pair key color (default: NULL = theme->hint) */
+    const cat_draw_color *key_color;           /* Override info pair key color (default: NULL = theme->hint) */
     TTF_Font          *body_font;              /* Override body/value text (default: CAT_FONT_TINY) */
     TTF_Font          *section_title_font;     /* Override section headers (default: CAT_FONT_SMALL) */
     TTF_Font          *key_font;               /* Override info-pair key text (default: CAT_FONT_TINY) */
@@ -321,13 +321,13 @@ int cat_detail_screen(cat_detail_opts *opts, cat_detail_result *result);
 
 /* Color context for the picker's live preview strip. Pass NULL to skip. */
 typedef struct {
-    struct { const char *label; ap_color color; } roles[8];
+    struct { const char *label; cat_draw_color color; } roles[8];
     int role_count;
     int active_role;   /* Index of the role being edited (-1 = none) */
 } cat_color_picker_context;
 
-int cat_color_picker(ap_color initial, ap_color *result);
-int cat_color_picker_ctx(ap_color initial, ap_color *result,
+int cat_color_picker(cat_draw_color initial, cat_draw_color *result);
+int cat_color_picker_ctx(cat_draw_color initial, cat_draw_color *result,
                          cat_color_picker_context *context);
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -672,7 +672,7 @@ int cat_list(cat_list_opts *opts, cat_list_result *result) {
         cat_set_input_delay(opts->input_delay);
     }
 
-    ap_theme *theme = cat_get_theme();
+    cat_theme *theme = cat_get_theme();
     int screen_w = cat_get_screen_width();
 
     TTF_Font *title_font = cat_get_font(CAT_FONT_EXTRA_LARGE);
@@ -1021,7 +1021,7 @@ int cat_list(cat_list_opts *opts, cat_list_result *result) {
                 int cb_y = item_y + (pill_h - CAT_S(20)) / 2;
                 int cb_size = CAT_S(20);
                 if (idx == highlight_idx) {
-                    ap_color cb_color = theme->highlighted_text;
+                    cat_draw_color cb_color = theme->highlighted_text;
                     if (opts->items[idx].selected) {
                         cat_draw_rect(cb_x, cb_y, cb_size, cb_size, theme->accent);
                         cat_draw_text(item_font, "✓", cb_x + CAT_S(2), cb_y - CAT_S(2), theme->highlighted_text);
@@ -1031,7 +1031,7 @@ int cat_list(cat_list_opts *opts, cat_list_result *result) {
                         SDL_RenderDrawRect(cat_get_renderer(), &border);
                     }
                 } else {
-                    ap_color cb_color = theme->text;
+                    cat_draw_color cb_color = theme->text;
                     cb_color.a = 180;
                     if (opts->items[idx].selected) {
                         cat_draw_rect(cb_x, cb_y, cb_size, cb_size, cb_color);
@@ -1046,7 +1046,7 @@ int cat_list(cat_list_opts *opts, cat_list_result *result) {
 
             /* Text color: follow the pill — highlight the departure item during transit,
              * switch to arrival item only once the pill settles */
-            ap_color text_color = (idx == highlight_idx)
+            cat_draw_color text_color = (idx == highlight_idx)
                                 ? theme->highlighted_text : theme->text;
 
             /* Text — always at fixed item_y; selected item may scroll */
@@ -1079,7 +1079,7 @@ int cat_list(cat_list_opts *opts, cat_list_result *result) {
 
                 /* Reorder mode indicator — at fixed item_y */
                 if (reorder_mode) {
-                    ap_color reorder_color = theme->accent;
+                    cat_draw_color reorder_color = theme->accent;
                     int indicator_w = CAT_S(4);
                     cat_draw_rect(margin - indicator_w - CAT_S(4), item_y, indicator_w, pill_h, reorder_color);
                 }
@@ -1093,7 +1093,7 @@ int cat_list(cat_list_opts *opts, cat_list_result *result) {
             if (trailing_w > 0) {
                 int trailing_x = margin + available_w - pill_pad - trailing_w;
                 int trailing_y = item_y + (pill_h - text_h) / 2;
-                ap_color trailing_color = theme->hint;
+                cat_draw_color trailing_color = theme->hint;
                 if (idx == highlight_idx) trailing_color.a = 255;
                 cat_draw_text(item_font, opts->items[idx].trailing_text,
                              trailing_x, trailing_y, trailing_color);
@@ -1165,7 +1165,7 @@ int cat_options_list(cat_options_list_opts *opts, cat_options_list_result *resul
     result->focused_index = 0;
     result->visible_start_index = 0;
 
-    ap_theme *theme = cat_get_theme();
+    cat_theme *theme = cat_get_theme();
     int screen_w = cat_get_screen_width();
 
     TTF_Font *label_font = opts->label_font ? opts->label_font : cat_get_font(CAT_FONT_LARGE);
@@ -1296,8 +1296,8 @@ int cat_options_list(cat_options_list_opts *opts, cat_options_list_result *resul
                             }
                         }
                     } else if (item->type == CAT_OPT_COLOR_PICKER) {
-                        ap_color initial_color = {255, 255, 255, 255};
-                        ap_color picked;
+                        cat_draw_color initial_color = {255, 255, 255, 255};
+                        cat_draw_color picked;
                         int sel = cat__options_valid_index(item);
                         if (sel >= 0 && item->options[sel].value &&
                             item->options[sel].value[0] == '#') {
@@ -1473,8 +1473,8 @@ int cat_options_list(cat_options_list_opts *opts, cat_options_list_result *resul
             }
             if (max_label_w < 0) max_label_w = 0;
             {
-                ap_color label_color = is_selected ? theme->highlighted_text : theme->text;
-                ap_color value_color = is_selected ? theme->highlighted_text : theme->hint;
+                cat_draw_color label_color = is_selected ? theme->highlighted_text : theme->text;
+                cat_draw_color value_color = is_selected ? theme->highlighted_text : theme->hint;
                 int label_y = item_y + (pill_h - TTF_FontHeight(label_font)) / 2;
                 int value_y = item_y + (pill_h - TTF_FontHeight(value_font)) / 2;
                 int content_right = margin + available_w - pill_pad;
@@ -1722,7 +1722,7 @@ static void cat__kb_move_cursor_right(const char *text, int *text_cursor) {
 static void cat__kb_draw_input_text(TTF_Font *font, cat_keyboard_result *result,
                                    int text_cursor, int *text_scroll,
                                    int input_x, int input_y, int input_w, int input_h,
-                                   bool caret_visible, ap_color text_color) {
+                                   bool caret_visible, cat_draw_color text_color) {
     int ty = input_y + (input_h - TTF_FontHeight(font)) / 2;
     int tx = input_x + CAT_S(16);
     int field_w = input_w - CAT_S(32);
@@ -1805,7 +1805,7 @@ int cat_keyboard(const char *initial_text, const char *help_text,
         strncpy(result->text, initial_text, sizeof(result->text) - 1);
     }
 
-    ap_theme *theme = cat_get_theme();
+    cat_theme *theme = cat_get_theme();
     int screen_w = cat_get_screen_width();
     int screen_h = cat_get_screen_height();
 
@@ -2072,15 +2072,15 @@ int cat_keyboard(const char *initial_text, const char *help_text,
                                caret_visible, theme->highlighted_text);
 
         /* ── Key rendering ── */
-        ap_color key_bg_normal  = theme->accent;
-        ap_color key_bg_sel     = theme->highlight;
-        ap_color key_fg_normal  = theme->hint;
-        ap_color key_fg_sel     = theme->highlighted_text;
+        cat_draw_color key_bg_normal  = theme->accent;
+        cat_draw_color key_bg_sel     = theme->highlight;
+        cat_draw_color key_fg_normal  = theme->hint;
+        cat_draw_color key_fg_sel     = theme->highlighted_text;
 
         /* Helper macro: draw a single key rectangle with text */
         #define CAT__KB_DRAW_KEY(x, y, w, h, label, is_sel, font_to_use) do { \
-            ap_color _bg = (is_sel) ? key_bg_sel : key_bg_normal; \
-            ap_color _fg = (is_sel) ? key_fg_sel : key_fg_normal; \
+            cat_draw_color _bg = (is_sel) ? key_bg_sel : key_bg_normal; \
+            cat_draw_color _fg = (is_sel) ? key_fg_sel : key_fg_normal; \
             cat_draw_rounded_rect((x), (y), (w), (h), key_r, _bg); \
             if (label) { \
                 int _tw = cat_measure_text((font_to_use), (label)); \
@@ -2170,14 +2170,14 @@ int cat_keyboard(const char *initial_text, const char *help_text,
             int space_w = key_w * 8 + key_spacing * 7;
             int sx = (screen_w - space_w) / 2;
             bool sel = (cursor_row == 4);
-            ap_color bg = sel ? key_bg_sel : key_bg_normal;
+            cat_draw_color bg = sel ? key_bg_sel : key_bg_normal;
             cat_draw_rounded_rect(sx, row_y, space_w, key_h, key_r, bg);
             /* Space indicator: centered line */
             int line_w = space_w / 3;
             int line_h = CAT_S(3);
             int line_x = sx + (space_w - line_w) / 2;
             int line_y = row_y + (key_h - line_h) / 2;
-            ap_color line_c = sel ? key_fg_sel : key_fg_normal;
+            cat_draw_color line_c = sel ? key_fg_sel : key_fg_normal;
             cat_draw_rect(line_x, line_y, line_w, line_h, line_c);
         }
 
@@ -2223,7 +2223,7 @@ int cat_url_keyboard(const char *initial_text, const char *help_text,
     if (initial_text)
         strncpy(result->text, initial_text, sizeof(result->text) - 1);
 
-    ap_theme *theme = cat_get_theme();
+    cat_theme *theme = cat_get_theme();
     int screen_w = cat_get_screen_width();
     int screen_h = cat_get_screen_height();
 
@@ -2435,14 +2435,14 @@ int cat_url_keyboard(const char *initial_text, const char *help_text,
                                input_x, input_y, input_w, input_h,
                                caret_visible, theme->highlighted_text);
 
-        ap_color key_bg_normal = theme->accent;
-        ap_color key_bg_sel    = theme->highlight;
-        ap_color key_fg_normal = theme->hint;
-        ap_color key_fg_sel    = theme->highlighted_text;
+        cat_draw_color key_bg_normal = theme->accent;
+        cat_draw_color key_bg_sel    = theme->highlight;
+        cat_draw_color key_fg_normal = theme->hint;
+        cat_draw_color key_fg_sel    = theme->highlighted_text;
 
         #define CAT__KB_DRAW_KEY2(x, y, w, h, label, is_sel, fnt) do { \
-            ap_color _bg = (is_sel) ? key_bg_sel : key_bg_normal; \
-            ap_color _fg = (is_sel) ? key_fg_sel : key_fg_normal; \
+            cat_draw_color _bg = (is_sel) ? key_bg_sel : key_bg_normal; \
+            cat_draw_color _fg = (is_sel) ? key_fg_sel : key_fg_normal; \
             cat_draw_rounded_rect((x), (y), (w), (h), key_r, _bg); \
             if (label) { \
                 int _tw = cat_measure_text((fnt), (label)); \
@@ -2580,7 +2580,7 @@ int cat_confirmation(cat_message_opts *opts, cat_confirm_result *result) {
     memset(result, 0, sizeof(*result));
     result->confirmed = false;
 
-    ap_theme *theme = cat_get_theme();
+    cat_theme *theme = cat_get_theme();
     int screen_w = cat_get_screen_width();
     int screen_h = cat_get_screen_height();
     int msg_max_w = screen_w - CAT_S(80);
@@ -2683,7 +2683,7 @@ int cat_selection(const char *message, cat_selection_option *options, int count,
 
     memset(result, 0, sizeof(*result));
 
-    ap_theme *theme = cat_get_theme();
+    cat_theme *theme = cat_get_theme();
     int screen_w = cat_get_screen_width();
     int screen_h = cat_get_screen_height();
 
@@ -2750,8 +2750,8 @@ int cat_selection(const char *message, cat_selection_option *options, int count,
             int pw = tw + pill_pad * 2;
             bool is_sel = (i == selected);
 
-            ap_color pill_bg = is_sel ? theme->highlight : theme->accent;
-            ap_color pill_fg = is_sel ? theme->highlighted_text : theme->hint;
+            cat_draw_color pill_bg = is_sel ? theme->highlight : theme->accent;
+            cat_draw_color pill_fg = is_sel ? theme->highlighted_text : theme->hint;
 
             cat_draw_pill(opt_x, opt_y, pw, pill_h, pill_bg);
             cat_draw_text(opt_font, options[i].label,
@@ -2799,7 +2799,7 @@ static void *cat__process_worker(void *arg) {
 int cat_process_message(cat_process_opts *opts, cat_process_fn fn, void *userdata) {
     if (!opts || !fn) return CAT_ERROR;
 
-    ap_theme *theme = cat_get_theme();
+    cat_theme *theme = cat_get_theme();
     int screen_w = cat_get_screen_width();
     int screen_h = cat_get_screen_height();
 
@@ -2883,7 +2883,7 @@ int cat_process_message(cat_process_opts *opts, cat_process_fn fn, void *userdat
                 ? dyn_y + dyn_lines * dyn_line_h + CAT_S(12)
                 : center_y + CAT_S(30);
 
-            ap_color bar_bg = theme->accent;
+            cat_draw_color bar_bg = theme->accent;
             bar_bg.a = 80;
             cat_draw_progress_bar(bar_x, bar_y, bar_w, bar_h, prog, theme->accent, bar_bg);
 
@@ -2936,7 +2936,7 @@ int cat_detail_screen(cat_detail_opts *opts, cat_detail_result *result) {
 
     memset(result, 0, sizeof(*result));
 
-    ap_theme *theme = cat_get_theme();
+    cat_theme *theme = cat_get_theme();
     int screen_w = cat_get_screen_width();
 
     TTF_Font *title_font   = cat_get_font(CAT_FONT_SMALL);
@@ -3131,7 +3131,7 @@ int cat_detail_screen(cat_detail_opts *opts, cat_detail_result *result) {
         if (opts->status_bar) cat_draw_status_bar(opts->status_bar);
 
         /* Resolve optional key color override */
-        ap_color info_key_color = opts->key_color ? *opts->key_color : theme->hint;
+        cat_draw_color info_key_color = opts->key_color ? *opts->key_color : theme->hint;
 
         /* Clip to content area */
         SDL_Rect clip = {content_x, content_y, content_w, content_h};
@@ -3275,7 +3275,7 @@ int cat_detail_screen(cat_detail_opts *opts, cat_detail_result *result) {
  * ═══════════════════════════════════════════════════════════════════════════ */
 
 /* 25 predefined colors in a 5x5 grid */
-static const ap_color cat__picker_colors[25] = {
+static const cat_draw_color cat__picker_colors[25] = {
     {255,  59,  48, 255}, {255, 149,   0, 255}, {255, 204,   0, 255}, { 52, 199,  89, 255}, {  0, 199, 190, 255},
     { 48, 176, 199, 255}, { 50, 173, 230, 255}, {  0, 122, 255, 255}, { 88,  86, 214, 255}, {175,  82, 222, 255},
     {255,  45,  85, 255}, {162, 132,  94, 255}, {142, 142, 147, 255}, {174, 174, 178, 255}, {199, 199, 204, 255},
@@ -3331,12 +3331,12 @@ static float cat__field_y_to_lightness(int y, int field_h) {
 
 /* ─── HSL color picker ─────────────────────────────────────────────────── */
 
-int cat_color_picker_ctx(ap_color initial, ap_color *result,
+int cat_color_picker_ctx(cat_draw_color initial, cat_draw_color *result,
                          cat_color_picker_context *context) {
     if (!result) return CAT_ERROR;
     *result = initial;
 
-    ap_theme *theme = cat_get_theme();
+    cat_theme *theme = cat_get_theme();
     SDL_Renderer *renderer = cat_get_renderer();
     int screen_w = cat_get_screen_width();
     int screen_h = cat_get_screen_height();
@@ -3472,21 +3472,21 @@ int cat_color_picker_ctx(ap_color initial, ap_color *result,
            colors in their actual roles. The active color updates live.
            Footer hints already cover accent, button text, button bg. */
         if (context && context->role_count > 0 && preview_strip_h > 0) {
-            ap_color live_color = { pick_r, pick_g, pick_b, 255 };
+            cat_draw_color live_color = { pick_r, pick_g, pick_b, 255 };
 
             /* Resolve role colors, substituting live pick for active. */
-            ap_color resolved[8];
+            cat_draw_color resolved[8];
             for (int i = 0; i < context->role_count && i < 8; i++)
                 resolved[i] = (i == context->active_role) ? live_color
                                                            : context->roles[i].color;
 
-            ap_color col_accent = context->role_count > 0 ? resolved[0] : theme->accent;
-            ap_color col_bg     = context->role_count > 1 ? resolved[1] : theme->background;
-            ap_color col_text   = context->role_count > 2 ? resolved[2] : theme->text;
-            ap_color col_sel    = context->role_count > 3 ? resolved[3] : theme->highlight;
-            ap_color col_hint   = context->role_count > 4 ? resolved[4] : theme->hint;
-            ap_color col_btn_tx = context->role_count > 5 ? resolved[5] : theme->button_label;
-            ap_color col_btn_bg = context->role_count > 6 ? resolved[6] : theme->button_glyph_bg;
+            cat_draw_color col_accent = context->role_count > 0 ? resolved[0] : theme->accent;
+            cat_draw_color col_bg     = context->role_count > 1 ? resolved[1] : theme->background;
+            cat_draw_color col_text   = context->role_count > 2 ? resolved[2] : theme->text;
+            cat_draw_color col_sel    = context->role_count > 3 ? resolved[3] : theme->highlight;
+            cat_draw_color col_hint   = context->role_count > 4 ? resolved[4] : theme->hint;
+            cat_draw_color col_btn_tx = context->role_count > 5 ? resolved[5] : theme->button_label;
+            cat_draw_color col_btn_bg = context->role_count > 6 ? resolved[6] : theme->button_glyph_bg;
 
             TTF_Font *preview_font = cat_get_font(CAT_FONT_SMALL);
             int preview_y = field_y + field_h;
@@ -3531,7 +3531,7 @@ int cat_color_picker_ctx(ap_color initial, ap_color *result,
             if (preview_font) {
                 char hex[16];
                 snprintf(hex, sizeof(hex), "#%02X%02X%02X", pick_r, pick_g, pick_b);
-                ap_color hex_color = { pick_r, pick_g, pick_b, 255 };
+                cat_draw_color hex_color = { pick_r, pick_g, pick_b, 255 };
                 int hex_text_w = cat_measure_text(preview_font, hex);
                 cat_draw_text(preview_font, hex, screen_w - hex_text_w - inset, row_y, hex_color);
             }
@@ -3550,8 +3550,8 @@ int cat_color_picker_ctx(ap_color initial, ap_color *result,
             int arm = CAT_S(20);
             int thick = CAT_S(3);
             if (thick < 2) thick = 2;
-            ap_color white = { 255, 255, 255, 255 };
-            ap_color black = { 0, 0, 0, 200 };
+            cat_draw_color white = { 255, 255, 255, 255 };
+            cat_draw_color black = { 0, 0, 0, 200 };
 
             /* Black outline */
             cat_draw_rect(cross_x - arm - 1, cross_y - thick / 2 - 1,
@@ -3566,8 +3566,8 @@ int cat_color_picker_ctx(ap_color initial, ap_color *result,
         /* Floating preview swatch — follows cursor with black border to
            isolate from surrounding colors (mitigates simultaneous contrast). */
         {
-            ap_color sel = { pick_r, pick_g, pick_b, 255 };
-            ap_color border_color = { 0, 0, 0, 255 };
+            cat_draw_color sel = { pick_r, pick_g, pick_b, 255 };
+            cat_draw_color border_color = { 0, 0, 0, 255 };
             int swatch_size = CAT_S(32);
             int border = CAT_S(3);
             int offset = CAT_S(24);
@@ -3598,7 +3598,7 @@ int cat_color_picker_ctx(ap_color initial, ap_color *result,
     return CAT_CANCELLED;
 }
 
-int cat_color_picker(ap_color initial, ap_color *result) {
+int cat_color_picker(cat_draw_color initial, cat_draw_color *result) {
     return cat_color_picker_ctx(initial, result, NULL);
 }
 
@@ -3609,7 +3609,7 @@ int cat_color_picker(ap_color initial, ap_color *result) {
 void cat_show_help_overlay(const char *text) {
     if (!text || !text[0]) return;
 
-    ap_theme *theme = cat_get_theme();
+    cat_theme *theme = cat_get_theme();
     int screen_w = cat_get_screen_width();
     int screen_h = cat_get_screen_height();
 
@@ -3651,7 +3651,7 @@ void cat_show_help_overlay(const char *text) {
         }
 
         /* Semi-transparent background */
-        ap_color overlay_bg = {0, 0, 0, 200};
+        cat_draw_color overlay_bg = {0, 0, 0, 200};
         cat_draw_rect(0, 0, screen_w, screen_h, overlay_bg);
 
         /* Scrollable text */
@@ -4679,7 +4679,7 @@ int cat_queue_viewer(const cat_queue_opts *opts) {
     int      pill_prev_target_y    = 0;
     int      pill_prev_target_w    = 0;
 
-    ap_theme *theme    = cat_get_theme();
+    cat_theme *theme    = cat_get_theme();
     int       screen_w = cat_get_screen_width();
     int       margin   = CAT_DS(cat__g.device_padding);
     int       pill_pad = CAT_DS(theme->ui_padding_x);
@@ -4711,11 +4711,11 @@ int cat_queue_viewer(const cat_queue_opts *opts) {
     int compact_title_fh = TTF_FontHeight(compact_title_font);
     int compact_sub_fh   = TTF_FontHeight(compact_sub_font);
 
-    ap_color col_done     = {100, 200, 100, 255};
-    ap_color col_failed   = {255, 100, 100, 255};
-    ap_color col_bar_bg   = { 40,  40,  50, 255};
-    ap_color col_bar_done = { 80, 200,  80, 255};
-    ap_color col_bar_fail = {200,  80,  80, 255};
+    cat_draw_color col_done     = {100, 200, 100, 255};
+    cat_draw_color col_failed   = {255, 100, 100, 255};
+    cat_draw_color col_bar_bg   = { 40,  40,  50, 255};
+    cat_draw_color col_bar_done = { 80, 200,  80, 255};
+    cat_draw_color col_bar_fail = {200,  80,  80, 255};
 
     bool     running    = true;
     uint32_t last_frame = SDL_GetTicks();
@@ -5058,7 +5058,7 @@ int cat_queue_viewer(const cat_queue_opts *opts) {
             bool is_selected  = (fi == cursor);
             bool is_highlight = (fi == highlight_fi);
 
-            ap_color status_color;
+            cat_draw_color status_color;
             switch (s) {
                 case CAT_QUEUE_DONE:    status_color = col_done;      break;
                 case CAT_QUEUE_FAILED:  status_color = col_failed;    break;
@@ -5066,8 +5066,8 @@ int cat_queue_viewer(const cat_queue_opts *opts) {
                 default:               status_color = theme->hint;   break;
             }
 
-            ap_color text_color = is_highlight ? theme->highlighted_text : theme->text;
-            ap_color sub_color  = is_highlight ? theme->highlighted_text : theme->hint;
+            cat_draw_color text_color = is_highlight ? theme->highlighted_text : theme->text;
+            cat_draw_color sub_color  = is_highlight ? theme->highlighted_text : theme->hint;
             if (is_highlight) status_color = theme->highlighted_text;
 
             /* Per-item layout: reserve space for status text if present */
@@ -5154,7 +5154,7 @@ int cat_queue_viewer(const cat_queue_opts *opts) {
                 if (bar_w > 0) {
                     cat_draw_rounded_rect(bar_x, bar_y, bar_w, layout_bar_h, layout_bar_r, col_bar_bg);
 
-                    ap_color fill;
+                    cat_draw_color fill;
                     if      (s == CAT_QUEUE_DONE)    fill = col_bar_done;
                     else if (s == CAT_QUEUE_FAILED)  fill = col_bar_fail;
                     else if (s == CAT_QUEUE_SKIPPED) fill = theme->hint;
@@ -5285,7 +5285,7 @@ int cat_download_manager(cat_download *downloads, int count,
         return CAT_ERROR;
     }
 
-    ap_theme *theme = cat_get_theme();
+    cat_theme *theme = cat_get_theme();
     int screen_w = cat_get_screen_width();
     int screen_h = cat_get_screen_height();
     TTF_Font *label_font = cat_get_font(CAT_FONT_MEDIUM);
@@ -5435,9 +5435,9 @@ int cat_download_manager(cat_download *downloads, int count,
 
             /* Label */
             const char *lbl = dl->label ? dl->label : dl->url;
-            ap_color lbl_color = theme->text;
-            if (dls->status == CAT_DL_COMPLETE) lbl_color = (ap_color){100, 255, 100, 255};
-            if (dls->status == CAT_DL_FAILED) lbl_color = (ap_color){255, 100, 100, 255};
+            cat_draw_color lbl_color = theme->text;
+            if (dls->status == CAT_DL_COMPLETE) lbl_color = (cat_draw_color){100, 255, 100, 255};
+            if (dls->status == CAT_DL_FAILED) lbl_color = (cat_draw_color){255, 100, 100, 255};
 
             if (label_font) {
                 cat_draw_text_clipped(label_font, lbl, bar_x, iy, lbl_color, bar_w);
@@ -5445,15 +5445,15 @@ int cat_download_manager(cat_download *downloads, int count,
 
             /* Progress bar */
             int bar_y = iy + label_h + CAT_S(4);
-            ap_color bar_bg = {40, 40, 50, 255};
+            cat_draw_color bar_bg = {40, 40, 50, 255};
             cat_draw_rounded_rect(bar_x, bar_y, bar_w, bar_h, bar_r, bar_bg);
 
             if (dls->progress > 0.001f) {
                 int fill_w = (int)(dls->progress * bar_w);
                 if (fill_w < bar_h) fill_w = bar_h; /* Minimum for rounding */
-                ap_color fill_c;
-                if (dls->status == CAT_DL_COMPLETE) fill_c = (ap_color){80, 200, 80, 255};
-                else if (dls->status == CAT_DL_FAILED) fill_c = (ap_color){200, 80, 80, 255};
+                cat_draw_color fill_c;
+                if (dls->status == CAT_DL_COMPLETE) fill_c = (cat_draw_color){80, 200, 80, 255};
+                else if (dls->status == CAT_DL_FAILED) fill_c = (cat_draw_color){200, 80, 80, 255};
                 else fill_c = theme->highlight;
                 cat_draw_rounded_rect(bar_x, bar_y, fill_w, bar_h, bar_r, fill_c);
             }
@@ -5468,10 +5468,10 @@ int cat_download_manager(cat_download *downloads, int count,
                     snprintf(pct_buf, sizeof(pct_buf), "%.0f%% — %s", dls->progress * 100.0f, speed_buf);
                     cat_draw_text(speed_font, pct_buf, bar_x, sy, theme->hint);
                 } else if (dls->status == CAT_DL_COMPLETE) {
-                    cat_draw_text(speed_font, "Complete", bar_x, sy, (ap_color){100,255,100,255});
+                    cat_draw_text(speed_font, "Complete", bar_x, sy, (cat_draw_color){100,255,100,255});
                 } else if (dls->status == CAT_DL_FAILED) {
                     cat_draw_text_clipped(speed_font, dls->error, bar_x, sy,
-                        (ap_color){255,100,100,255}, bar_w);
+                        (cat_draw_color){255,100,100,255}, bar_w);
                 } else {
                     cat_draw_text(speed_font, "Pending...", bar_x, sy, theme->hint);
                 }
