@@ -981,6 +981,25 @@ void           cat_draw_image(SDL_Texture *tex, int x, int y, int w, int h);
    cat_draw_image when r<=0, corners==0, or no render target is available. */
 void           cat_draw_image_rounded_ex(SDL_Texture *tex, int x, int y, int w, int h, int r, unsigned corners);
 SDL_Texture   *cat_load_image(const char *path);
+/* Load `path` downscaled so its largest dimension is <= max_dim, backed by an
+   on-disk thumbnail at `thumb_path`. Large source images (e.g. ~1MB box-art PNGs)
+   are expensive to decode; the first load decodes the full image once, writes the
+   downscaled thumbnail, and returns its texture. Later loads decode the small
+   thumbnail (much faster) when it exists and is newer than the source. Images
+   already <= max_dim are loaded directly with no thumbnail written. Returns a
+   texture owned by the caller (destroy it or hand to cat_cache_put), or NULL. */
+SDL_Texture   *cat_load_image_thumbnail(const char *path, const char *thumb_path,
+                                        int max_dim, int *out_w, int *out_h);
+/* True if `thumb_path` exists and is at least as new as `path`. */
+bool           cat_thumbnail_is_cached(const char *path, const char *thumb_path);
+/* Renderer-free half of cat_load_image_thumbnail: decode + downscale (+ persist the
+   thumbnail) into a new SDL_Surface (caller frees). Touches no renderer state, so it
+   is safe to call off the main thread; convert to a texture on the render thread. */
+SDL_Surface   *cat_decode_thumbnail_surface(const char *path, const char *thumb_path,
+                                            int max_dim);
+/* Create a renderer texture from a surface (e.g. one decoded on a worker thread).
+   Must be called on the render thread. Caller still owns `surf`. */
+SDL_Texture   *cat_texture_from_surface(SDL_Surface *surf);
 void           cat_draw_scrollbar(int x, int y, int h, int visible, int total, int offset);
 /* Draw a horizontal tab bar spanning the full screen width. Uses the theme's
  * tab_color (inactive) and tab_selected_color (active) from the stylesheet,
@@ -4250,6 +4269,90 @@ void cat_draw_image_rounded_ex(SDL_Texture *tex, int x, int y, int w, int h,
 SDL_Texture *cat_load_image(const char *path) {
     if (!path) return NULL;
     return IMG_LoadTexture(cat__g.renderer, path);
+}
+
+/* Downscale `src` so its largest dimension is <= max_dim, preserving aspect.
+   Returns a new RGBA surface (caller frees), or NULL if no scaling is needed. */
+static SDL_Surface *cat__downscale_surface(SDL_Surface *src, int max_dim) {
+    if (!src || max_dim <= 0) return NULL;
+    int sw = src->w, sh = src->h;
+    int longest = sw > sh ? sw : sh;
+    if (longest <= max_dim) return NULL;            /* already small enough */
+    double scale = (double)max_dim / (double)longest;
+    int dw = (int)(sw * scale + 0.5);
+    int dh = (int)(sh * scale + 0.5);
+    if (dw < 1) dw = 1;
+    if (dh < 1) dh = 1;
+    SDL_Surface *dst = SDL_CreateRGBSurfaceWithFormat(0, dw, dh, 32,
+                                                      SDL_PIXELFORMAT_RGBA32);
+    if (!dst) return NULL;
+    /* SDL_BlitScaled needs a same-format source for predictable results. */
+    SDL_Surface *src32 = src;
+    bool free_src32 = false;
+    if (src->format->format != SDL_PIXELFORMAT_RGBA32) {
+        src32 = SDL_ConvertSurfaceFormat(src, SDL_PIXELFORMAT_RGBA32, 0);
+        free_src32 = true;
+        if (!src32) { SDL_FreeSurface(dst); return NULL; }
+    }
+    if (SDL_BlitScaled(src32, NULL, dst, NULL) != 0) {
+        if (free_src32) SDL_FreeSurface(src32);
+        SDL_FreeSurface(dst);
+        return NULL;
+    }
+    if (free_src32) SDL_FreeSurface(src32);
+    return dst;
+}
+
+bool cat_thumbnail_is_cached(const char *path, const char *thumb_path) {
+    if (!thumb_path || !thumb_path[0]) return false;
+    struct stat ss, ts;
+    if (stat(thumb_path, &ts) != 0) return false;
+    /* Fresh if the source is gone or no newer than the thumbnail. */
+    return (stat(path, &ss) != 0 || ts.st_mtime >= ss.st_mtime);
+}
+
+SDL_Surface *cat_decode_thumbnail_surface(const char *path, const char *thumb_path,
+                                          int max_dim) {
+    if (!path || !path[0]) return NULL;
+
+    /* Fast path: a fresh thumbnail already exists — decode the small file. */
+    if (cat_thumbnail_is_cached(path, thumb_path)) {
+        SDL_Surface *t = IMG_Load(thumb_path);
+        if (t) return t;
+        /* fall through to regenerate a corrupt/unreadable thumbnail */
+    }
+
+    SDL_Surface *full = IMG_Load(path);
+    if (!full) return NULL;
+
+    SDL_Surface *small = cat__downscale_surface(full, max_dim);
+    if (small) {
+        /* Persist the downscaled copy so later loads hit the fast path. */
+        if (thumb_path && thumb_path[0]) {
+            IMG_SavePNG(small, thumb_path);          /* best-effort; ignore failure */
+        }
+        SDL_FreeSurface(full);
+        return small;
+    }
+    return full;                                     /* already small enough */
+}
+
+SDL_Texture *cat_texture_from_surface(SDL_Surface *surf) {
+    if (!surf) return NULL;
+    return SDL_CreateTextureFromSurface(cat__g.renderer, surf);
+}
+
+SDL_Texture *cat_load_image_thumbnail(const char *path, const char *thumb_path,
+                                      int max_dim, int *out_w, int *out_h) {
+    SDL_Surface *surf = cat_decode_thumbnail_surface(path, thumb_path, max_dim);
+    if (!surf) return NULL;
+    SDL_Texture *tex = SDL_CreateTextureFromSurface(cat__g.renderer, surf);
+    int tw = surf->w, th = surf->h;
+    SDL_FreeSurface(surf);
+    if (!tex) return NULL;
+    if (out_w) *out_w = tw;
+    if (out_h) *out_h = th;
+    return tex;
 }
 
 void cat_draw_scrollbar(int x, int y, int h, int visible, int total, int offset) {
