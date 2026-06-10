@@ -624,6 +624,8 @@ typedef struct {
     int          wifi_strength; /* 0=none..3=strong, supplied by the caller when wifi_supplied */
     bool         show_volume;   /* Show speaker icon; volume_percent must be supplied by the caller */
     int          volume_percent;/* 0-100 current volume, or -1 if unknown (icon hidden) */
+    bool         show_bluetooth;/* Show bluetooth icon (always when set; appearance tracks bt_state) */
+    int          bt_state;      /* 0=off (dim), 1=on, 2=connected — supplied by the caller */
     bool         no_ampm;       /* For 12-hour mode: skip AM/PM suffix */
     bool         no_pill;       /* Draw icons/text inline without pill background */
     bool         use_y;         /* If true, use y_position instead of default padding */
@@ -5385,6 +5387,7 @@ static void cat__blit_status_icon(int src_x, int src_y, int src_w, int src_h,
 #define CAT__BATTERY_H  10
 #define CAT__WIFI_SIZE  12
 #define CAT__VOLUME_SIZE 12
+#define CAT__BT_SIZE    12
 
 /* Helper: icon pixel size using the loaded spritesheet scale (1:1, no GPU upscaling) */
 #define CAT__ICON_PX(logical) ((logical) * cat__g.status_asset_scale)
@@ -5392,6 +5395,7 @@ static void cat__blit_status_icon(int src_x, int src_y, int src_w, int src_h,
 typedef struct {
     bool use_sprite_layout;
     bool wifi_visible;
+    bool bt_visible;
     bool volume_visible;
     bool battery_visible;
     bool battery_level_visible;   /* numeric "85%" next to the battery icon */
@@ -5399,6 +5403,7 @@ typedef struct {
     bool clock_24h;
     bool clock_no_ampm;
     int  wifi_strength;
+    int  bt_state;                /* 0=off, 1=on, 2=connected */
     int  visible_icon_count;
     bool single_icon_sprite_mode;
 } cat__status_bar_layout;
@@ -5423,6 +5428,12 @@ static inline cat__status_bar_layout cat__resolve_status_bar_layout(const cat_st
         layout.wifi_visible  = (layout.wifi_strength > 0);
     }
 
+    /* Bluetooth is always shown when enabled; the icon dims when the radio is
+       off (bt_state 0) and is solid when on/connected (bt_state >= 1). The
+       caller owns the radio read and supplies bt_state. */
+    layout.bt_visible = opts->show_bluetooth;
+    layout.bt_state   = opts->bt_state;
+
     /* Volume can't be read here (it lives in the platform daemon); the caller
        supplies volume_percent and we render the matching speaker sprite. */
     layout.volume_visible = opts->show_volume && opts->volume_percent >= 0;
@@ -5437,6 +5448,7 @@ static inline cat__status_bar_layout cat__resolve_status_bar_layout(const cat_st
     }
 
     if (layout.wifi_visible)    layout.visible_icon_count++;
+    if (layout.bt_visible)      layout.visible_icon_count++;
     if (layout.volume_visible)  layout.visible_icon_count++;
     if (layout.battery_visible) layout.visible_icon_count++;
 
@@ -5490,6 +5502,13 @@ static int cat__measure_status_bar_width(const cat_status_bar_opts *opts, TTF_Fo
         int wifi_w = layout->use_sprite_layout ? (CAT__WIFI_SIZE * s)
                                                : (font ? cat_measure_text(font, "WiFi") : CAT__WIFI_SIZE * s);
         total_w += wifi_w + margin;
+        has_any = true;
+    }
+
+    if (layout->bt_visible) {
+        int bt_w = layout->use_sprite_layout ? (CAT__BT_SIZE * s)
+                                             : (font ? cat_measure_text(font, "BT") : CAT__BT_SIZE * s);
+        total_w += bt_w + margin;
         has_any = true;
     }
 
@@ -5549,6 +5568,20 @@ static void cat__draw_status_bar_wifi_sprite(int x, int y, int wifi_strength) {
 
     cat__blit_status_icon(sx, 104, CAT__WIFI_SIZE, CAT__WIFI_SIZE,
                          x, y, iw, ih, cat__g.theme.hint);
+}
+
+/* Bluetooth rune. Always drawn when enabled; dimmed when the radio is off
+   (bt_state 0), solid when on/connected (bt_state >= 1). The glyph lives at
+   atlas base (36,64). */
+static void cat__draw_status_bar_bluetooth_sprite(int x, int y, int bt_state) {
+    int s = cat__g.device_scale ? cat__g.device_scale : 2;
+    int iw = CAT__BT_SIZE * s;
+    int ih = CAT__BT_SIZE * s;
+    cat_draw_color tint = cat__g.theme.hint;
+    if (bt_state <= 0)
+        tint.a = (uint8_t)((int)tint.a * 2 / 5);  /* off: dim to ~40% */
+    cat__blit_status_icon(36, 64, CAT__BT_SIZE, CAT__BT_SIZE,
+                         x, y, iw, ih, tint);
 }
 
 /* Speaker sprite, chosen by volume level: mute (<=0), low (1-50), high (51-100).
@@ -5663,6 +5696,10 @@ bool cat_status_bar_from_env(cat_status_bar_opts *out) {
     out->show_wifi          = cat__env_flag("CAT_STATUS_SHOW_WIFI", true);
     out->show_battery       = cat__env_flag("CAT_STATUS_SHOW_BATTERY", true);
     out->show_battery_level = cat__env_flag("CAT_STATUS_SHOW_BATTERY_LEVEL", false);
+    out->show_bluetooth     = cat__env_flag("CAT_STATUS_SHOW_BLUETOOTH", true);
+    /* No live BT read in an app; the launcher exports a state snapshot. */
+    const char *bt_state_env = cat__env_nonempty("CAT_STATUS_BT_STATE");
+    out->bt_state           = bt_state_env ? atoi(bt_state_env) : 0;
 
     /* Clock token: hide / 12 / 24 / no-ampm (default 24h). */
     const char *clock = cat__env_nonempty("CAT_STATUS_CLOCK");
@@ -5689,8 +5726,8 @@ bool cat_status_bar_from_env(cat_status_bar_opts *out) {
 
     /* Draw the bar if anything is enabled — battery LEVEL counts on its own
        (Battery="Percent" stores show_battery=0, show_battery_level=1). */
-    return out->show_wifi || out->show_battery || out->show_battery_level ||
-           out->show_clock != CAT_CLOCK_HIDE;
+    return out->show_wifi || out->show_bluetooth || out->show_battery ||
+           out->show_battery_level || out->show_clock != CAT_CLOCK_HIDE;
 }
 
 bool cat_hints_enabled_from_env(void) {
@@ -5731,6 +5768,12 @@ void cat_draw_status_bar(cat_status_bar_opts *opts) {
             int wx = pill_x + (pill_h - iw) / 2;
             int wy = pill_y + (pill_h - ih) / 2;
             cat__draw_status_bar_wifi_sprite(wx, wy, layout.wifi_strength);
+        } else if (layout.bt_visible) {
+            int iw = CAT__BT_SIZE * s;
+            int ih = CAT__BT_SIZE * s;
+            int bx = pill_x + (pill_h - iw) / 2;
+            int by = pill_y + (pill_h - ih) / 2;
+            cat__draw_status_bar_bluetooth_sprite(bx, by, layout.bt_state);
         } else if (layout.volume_visible) {
             int iw = CAT__VOLUME_SIZE * s;
             int ih = CAT__VOLUME_SIZE * s;
@@ -5757,6 +5800,22 @@ void cat_draw_status_bar(cat_status_bar_opts *opts) {
         } else {
             int text_w = cat_measure_text(font, "WiFi");
             cat_draw_text(font, "WiFi", cx, cy + (pill_h - TTF_FontHeight(font)) / 2, cat__g.theme.hint);
+            cx += text_w + margin;
+        }
+    }
+
+    /* Bluetooth icon */
+    if (layout.bt_visible) {
+        int iw = CAT__BT_SIZE * s;
+        int ih = CAT__BT_SIZE * s;
+        int iy = cy + (pill_h - ih) / 2;
+
+        if (cat__g.status_assets) {
+            cat__draw_status_bar_bluetooth_sprite(cx, iy, layout.bt_state);
+            cx += iw + margin;
+        } else {
+            int text_w = cat_measure_text(font, "BT");
+            cat_draw_text(font, "BT", cx, cy + (pill_h - TTF_FontHeight(font)) / 2, cat__g.theme.hint);
             cx += text_w + margin;
         }
     }
