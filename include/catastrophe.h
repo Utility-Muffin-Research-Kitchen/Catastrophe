@@ -1358,12 +1358,12 @@ static const char *cat__status_assets_dir(char *buf, size_t buf_size) {
     char launcher_buf[PATH_MAX];
     const char *launcher = cat__launcher_path(launcher_buf, sizeof(launcher_buf));
     if (!launcher) return NULL;
-    snprintf(buf, buf_size, "%s/res/assets", launcher);
+    if (snprintf(buf, buf_size, "%s/res/assets", launcher) >= (int)buf_size) return NULL;
     #else
     char system_buf[PATH_MAX];
     const char *system_path = cat__system_path(system_buf, sizeof(system_buf));
     if (!system_path) return NULL;
-    snprintf(buf, buf_size, "%s/res", system_path);
+    if (snprintf(buf, buf_size, "%s/res", system_path) >= (int)buf_size) return NULL;
     #endif
     return buf;
 #else
@@ -1939,8 +1939,9 @@ static int cat__theme_dirs(const char *out[], int max) {
     static char launcher_themes[PATH_MAX];
     char launcher_buf[PATH_MAX];
     const char *launcher = cat__launcher_path(launcher_buf, sizeof(launcher_buf));
-    if (launcher && n < max) {
-        snprintf(launcher_themes, sizeof(launcher_themes), "%s/res/themes", launcher);
+    if (launcher && n < max &&
+        snprintf(launcher_themes, sizeof(launcher_themes), "%s/res/themes", launcher)
+            < (int)sizeof(launcher_themes)) {
         out[n++] = launcher_themes;
     }
 #endif
@@ -2019,6 +2020,16 @@ int cat_stylesheet_load_theme(cat_stylesheet *s, const char *theme_name) {
     return CAT_OK;
 }
 
+/* Copy src into a fixed dst buffer, always NUL-terminating. Truncates if src is
+   too long (callers tolerate an unresolved path). Checking the snprintf result
+   keeps the build clean under -Wformat-truncation. */
+static void cat__str_copy(char *dst, size_t dst_size, const char *src) {
+    if (!dst || dst_size == 0) return;
+    int n = snprintf(dst, dst_size, "%s", src ? src : "");
+    if (n < 0 || (size_t)n >= dst_size)
+        dst[dst_size - 1] = '\0';
+}
+
 static void cat__stylesheet_to_theme(const cat_stylesheet *s, cat_theme *t) {
     t->highlight        = cat_color_to_sdl(s->ui.highlight_color);
     /* Accent (used for footer button-hint pills, section titles, queue/progress fills) is
@@ -2041,15 +2052,8 @@ static void cat__stylesheet_to_theme(const cat_stylesheet *s, cat_theme *t) {
     t->ui_padding_y      = s->ui.padding_y;
     t->pill_radius_ratio = s->ui.pill_radius_ratio;
 
-    if (s->ui.ui_font.path[0])
-        strncpy(t->font_path, s->ui.ui_font.path, sizeof(t->font_path) - 1);
-    else
-        t->font_path[0] = '\0';
-
-    if (s->wallpaper[0])
-        strncpy(t->bg_image_path, s->wallpaper, sizeof(t->bg_image_path) - 1);
-    else
-        t->bg_image_path[0] = '\0';
+    cat__str_copy(t->font_path, sizeof(t->font_path), s->ui.ui_font.path);
+    cat__str_copy(t->bg_image_path, sizeof(t->bg_image_path), s->wallpaper);
 }
 
 const char *cat_get_active_theme_dir(void)  { return cat__g.active_theme_dir; }
@@ -2221,12 +2225,14 @@ static void cat__state_file_path(char *buf, size_t buf_size) {
         return;
     }
     const char *base = cat__env_nonempty("ALLIUM_BASE_DIR");
-    if (base && base[0])
-        snprintf(buf, buf_size, "%s/state/theme", base);
-    else {
+    if (base && base[0]) {
+        if (snprintf(buf, buf_size, "%s/state/theme", base) >= (int)buf_size)
+            buf[0] = '\0';
+    } else {
         char userdata_buf[PATH_MAX];
         const char *userdata = cat__userdata_path(userdata_buf, sizeof(userdata_buf));
-        snprintf(buf, buf_size, "%s/theme", userdata ? userdata : ".catastrophe/state");
+        if (snprintf(buf, buf_size, "%s/theme", userdata ? userdata : ".catastrophe/state") >= (int)buf_size)
+            buf[0] = '\0';
     }
 #else
     snprintf(buf, buf_size, ".catastrophe/state/theme");
@@ -2453,12 +2459,14 @@ static int cat__load_fonts(const char *user_font_path) {
 #if defined(PLATFORM_MLP1)
         char launcher_buf[PATH_MAX];
         const char *launcher = cat__launcher_path(launcher_buf, sizeof(launcher_buf));
-        if (launcher && candidate_count < 8) {
-            snprintf(candidates[candidate_count++], PATH_MAX, "%s/res/font.ttf", launcher);
+        if (launcher && candidate_count < 8 &&
+            snprintf(candidates[candidate_count], PATH_MAX, "%s/res/font.ttf", launcher) < PATH_MAX) {
+            candidate_count++;
         }
-        if (launcher && candidate_count < 8) {
-            snprintf(candidates[candidate_count++], PATH_MAX,
-                     "%s/res/fonts/SpaceGrotesk/SpaceGrotesk-Regular.ttf", launcher);
+        if (launcher && candidate_count < 8 &&
+            snprintf(candidates[candidate_count], PATH_MAX,
+                     "%s/res/fonts/SpaceGrotesk/SpaceGrotesk-Regular.ttf", launcher) < PATH_MAX) {
+            candidate_count++;
         }
 #elif defined(PLATFORM_TG5040) || defined(PLATFORM_TG5050) || defined(PLATFORM_MY355)
         const char *sdcard = cat__sdcard_path();
@@ -2500,7 +2508,7 @@ static int cat__load_fonts(const char *user_font_path) {
     }
 
     /* Store in theme */
-    strncpy(cat__g.theme.font_path, font_path, sizeof(cat__g.theme.font_path) - 1);
+    cat__str_copy(cat__g.theme.font_path, sizeof(cat__g.theme.font_path), font_path);
     cat_log("Loading font: %s", font_path);
 
     /* Open all tiers into temp handles first, so a failure doesn't destroy old fonts */
@@ -6472,7 +6480,7 @@ int cat_init(cat_config *cfg) {
         if (bg_path && bg_path[0]) {
             cat__g.bg_texture = cat_load_image(bg_path);
             if (cat__g.bg_texture) {
-                strncpy(cat__g.theme.bg_image_path, bg_path, sizeof(cat__g.theme.bg_image_path) - 1);
+                cat__str_copy(cat__g.theme.bg_image_path, sizeof(cat__g.theme.bg_image_path), bg_path);
                 cat_log("Loaded background: %s", bg_path);
             } else {
                 cat_log("Warning: could not load background: %s", bg_path);
