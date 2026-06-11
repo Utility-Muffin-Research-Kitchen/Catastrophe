@@ -1048,11 +1048,13 @@ void     cat_box_split_cols(const cat_box *b, int left_w, int gutter,
                             cat_box *left, cat_box *right);
 /* Fit list rows into a box's content area. base_item_h is the natural row height.
  * If *visible_rows > 0 on entry it is taken as the row count (the caller's cached
- * scroll-state value); otherwise the count that fits is computed from the box and
- * written back. When the list overflows (item_count >= rows) the row height is
- * stretched so the rows fill the box exactly — no gap below the last row — and the
- * returned rect is snapped to that whole-rows height; a short list keeps base_item_h.
- * out_item_h receives the (possibly stretched) row height. Returns the row region. */
+ * scroll-state value), clamped to what fits at base_item_h so a stale count from a
+ * taller box can never compress rows; otherwise the count that fits is computed
+ * from the box. The actual count is always written back. When the list overflows
+ * (item_count >= rows) the row height is stretched so the rows fill the box
+ * exactly — no gap below the last row — and the returned rect is snapped to that
+ * whole-rows height; a short list keeps base_item_h. out_item_h receives the
+ * (possibly stretched) row height. Returns the row region. */
 SDL_Rect cat_box_fit_rows(const cat_box *b, int base_item_h, int item_count,
                           int *visible_rows, int *out_item_h);
 void           cat_draw_screen_title(const char *title, cat_status_bar_opts *status_bar);
@@ -4152,8 +4154,13 @@ SDL_Rect cat_box_fit_rows(const cat_box *b, int base_item_h, int item_count,
                           int *visible_rows, int *out_item_h) {
     SDL_Rect r = cat_box_content(b);
     int base = base_item_h > 0 ? base_item_h : 1;
-    int rows = (visible_rows && *visible_rows > 0) ? *visible_rows : r.h / base;
-    if (rows < 1) rows = 1;
+    int max_rows = r.h / base;   /* what fits at the natural height */
+    if (max_rows < 1) max_rows = 1;
+    int rows = (visible_rows && *visible_rows > 0) ? *visible_rows : max_rows;
+    /* A cached count from before the box shrank (hint bar appeared, layout
+       changed) could compress rows below base_item_h — or to zero height in a
+       tiny box. Rows only ever stretch, so clamp to what actually fits. */
+    if (rows > max_rows) rows = max_rows;
     int item_h = base;
     if (item_count >= rows && r.h > 0) {
         item_h = r.h / rows;   /* stretch rows to fill the box */
