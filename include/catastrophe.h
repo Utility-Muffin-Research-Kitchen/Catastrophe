@@ -1046,6 +1046,15 @@ cat_box  cat_box_carve_bottom(cat_box *b, int height);
  * margin. Either out pointer may be NULL. */
 void     cat_box_split_cols(const cat_box *b, int left_w, int gutter,
                             cat_box *left, cat_box *right);
+/* Fit list rows into a box's content area. base_item_h is the natural row height.
+ * If *visible_rows > 0 on entry it is taken as the row count (the caller's cached
+ * scroll-state value); otherwise the count that fits is computed from the box and
+ * written back. When the list overflows (item_count >= rows) the row height is
+ * stretched so the rows fill the box exactly — no gap below the last row — and the
+ * returned rect is snapped to that whole-rows height; a short list keeps base_item_h.
+ * out_item_h receives the (possibly stretched) row height. Returns the row region. */
+SDL_Rect cat_box_fit_rows(const cat_box *b, int base_item_h, int item_count,
+                          int *visible_rows, int *out_item_h);
 void           cat_draw_screen_title(const char *title, cat_status_bar_opts *status_bar);
 void           cat_draw_screen_title_centered(const char *title, cat_status_bar_opts *status_bar);
 int            cat_measure_wrapped_text_height(TTF_Font *font, const char *text, int max_w);
@@ -4137,6 +4146,22 @@ void cat_box_split_cols(const cat_box *b, int left_w, int gutter,
         cat_box r = { c.x + left_w, c.y, c.w - left_w, c.h, 0, 0, 0, half };
         *right = r;
     }
+}
+
+SDL_Rect cat_box_fit_rows(const cat_box *b, int base_item_h, int item_count,
+                          int *visible_rows, int *out_item_h) {
+    SDL_Rect r = cat_box_content(b);
+    int base = base_item_h > 0 ? base_item_h : 1;
+    int rows = (visible_rows && *visible_rows > 0) ? *visible_rows : r.h / base;
+    if (rows < 1) rows = 1;
+    int item_h = base;
+    if (item_count >= rows && r.h > 0) {
+        item_h = r.h / rows;   /* stretch rows to fill the box */
+        r.h = item_h * rows;   /* snap the region to whole rows (no remainder gap) */
+    }
+    if (visible_rows) *visible_rows = rows;
+    if (out_item_h)   *out_item_h = item_h;
+    return r;
 }
 
 static void cat__draw_screen_title_impl(const char *title, cat_status_bar_opts *status_bar, bool center) {
