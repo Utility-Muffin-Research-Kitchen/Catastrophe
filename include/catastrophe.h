@@ -5707,7 +5707,8 @@ static void cat__draw_status_bar_wifi_sprite(int x, int y, int wifi_strength) {
 
 /* Bluetooth rune. Always drawn when enabled; dimmed when the radio is off
    (bt_state 0), solid when on/connected (bt_state >= 1). The glyph lives at
-   atlas base (36,64). */
+   atlas base (53,104) - generate_assets_atlas.py's "bluetooth" slot; the
+   sheets are generator output, so coordinates must match the script. */
 static void cat__draw_status_bar_bluetooth_sprite(int x, int y, int bt_state) {
     int s = cat__g.device_scale ? cat__g.device_scale : 2;
     int iw = CAT__BT_SIZE * s;
@@ -5715,7 +5716,7 @@ static void cat__draw_status_bar_bluetooth_sprite(int x, int y, int bt_state) {
     cat_draw_color tint = cat__g.theme.hint;
     if (bt_state <= 0)
         tint.a = (uint8_t)((int)tint.a * 2 / 5);  /* off: dim to ~40% */
-    cat__blit_status_icon(36, 64, CAT__BT_SIZE, CAT__BT_SIZE,
+    cat__blit_status_icon(53, 104, CAT__BT_SIZE, CAT__BT_SIZE,
                          x, y, iw, ih, tint);
 }
 
