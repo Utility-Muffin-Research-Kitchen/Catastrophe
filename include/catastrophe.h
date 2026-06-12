@@ -4161,10 +4161,16 @@ SDL_Rect cat_box_fit_rows(const cat_box *b, int base_item_h, int item_count,
        changed) could compress rows below base_item_h — or to zero height in a
        tiny box. Rows only ever stretch, so clamp to what actually fits. */
     if (rows > max_rows) rows = max_rows;
+    (void)item_count;
     int item_h = base;
-    if (item_count >= rows && r.h > 0) {
-        item_h = r.h / rows;   /* stretch rows to fill the box */
-        r.h = item_h * rows;   /* snap the region to whole rows (no remainder gap) */
+    if (r.h > 0) {
+        /* Rows always render at the filled pitch, whether or not the list
+           overflows: a short list draws fewer rows on the SAME grid a full one
+           uses, so pills and any pane snapped to the box land pixel-identical
+           across screens. List length changes how many rows appear, never the
+           geometry. */
+        item_h = r.h / rows;
+        r.h = item_h * rows;
     }
     if (visible_rows) *visible_rows = rows;
     if (out_item_h)   *out_item_h = item_h;
