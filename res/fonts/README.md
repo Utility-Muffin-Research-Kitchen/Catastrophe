@@ -9,6 +9,9 @@
 All fonts are SIL Open Font License 1.1 — free to bundle and redistribute.
 License text lives in `OFL.txt` (or `LICENSE.txt`) inside each family folder.
 
+Space Grotesk includes U+21E7 (⇧) copied from the bundled Inter/default font so
+Catastrophe's on-screen keyboard shift key renders in Jawaka themes.
+
 ## Referencing fonts from a stylesheet
 
 Themes can use any bundled font by pointing at its path relative to `res/fonts/`:

@@ -1299,7 +1299,7 @@ int cat_url_keyboard(const char *initial_text, const char *help_text,
 **Button mapping** (Gabagool-compatible):
 - **B**: Backspace
 - **X**: Space (general) / Toggle symbol alternates (URL)
-- **Y**: Exit without saving
+- **Y**: Cancel without saving
 - **Select**: Toggle shift
 - **Start**: Confirm
 - **L1/R1**: Move text cursor left/right

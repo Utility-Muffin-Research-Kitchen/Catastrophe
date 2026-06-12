@@ -1280,7 +1280,9 @@ int cat_options_list(cat_options_list_opts *opts, cat_options_list_result *resul
                         if (sel >= 0 && item->options[sel].value) {
                             initial = item->options[sel].value;
                         }
-                        int kb_ret = cat_keyboard(initial, "B: Cancel", CAT_KB_GENERAL, &kb_result);
+                        int kb_ret = cat_keyboard(initial,
+                                                  "Start: Confirm\nY: Cancel",
+                                                  CAT_KB_GENERAL, &kb_result);
                         if (kb_ret == CAT_OK) {
                             /* Update the option value — caller must manage memory */
                             if (sel >= 0) {
@@ -1552,6 +1554,8 @@ int cat_options_list(cat_options_list_opts *opts, cat_options_list_result *resul
 #define CAT__KB_KEY_SYMBOL     (-4)
 #define CAT__KB_KEY_SPACE      (-5)
 
+#define CAT__KB_SHIFT_LABEL "\xe2\x87\xa7" /* ⇧ */
+
 /* 5-row general layout — 12-column virtual grid.
  * Row 0: 1-0 keys (10) + backspace (2 cols)
  * Row 1: qwertyuiop (10 cols, centered)
@@ -1717,6 +1721,15 @@ static void cat__kb_move_cursor_right(const char *text, int *text_cursor) {
     *text_cursor = cat__kb_utf8_next_boundary(text, *text_cursor);
 }
 
+static void cat__kb_draw_footer(void) {
+    cat_footer_item kb_footer[] = {
+        { .button = CAT_BTN_Y,     .label = "CANCEL",  .is_confirm = false },
+        { .button = CAT_BTN_MENU,  .label = "HELP",    .is_confirm = false },
+        { .button = CAT_BTN_START, .label = "CONFIRM", .is_confirm = true  },
+    };
+    cat_draw_footer(kb_footer, (int)(sizeof(kb_footer) / sizeof(kb_footer[0])));
+}
+
 /* Draw keyboard input text field content with horizontal scrolling.
    Keeps the caret visible by adjusting *text_scroll as the cursor moves. */
 static void cat__kb_draw_input_text(TTF_Font *font, cat_keyboard_result *result,
@@ -1774,16 +1787,16 @@ static const char *cat__kb_help_default =
     "X: Space\n"
     "L1 / R1: Move cursor within text\n"
     "Select: Toggle Shift (uppercase/symbols)\n"
-    "Y: Exit keyboard without saving\n"
-    "Start: Enter (confirm input)";
+    "Y: Cancel without saving\n"
+    "Start: Confirm input";
 
 static const char *cat__kb_help_numeric =
     "D-Pad: Navigate between keys\n"
     "A: Type the selected digit\n"
     "B: Backspace\n"
     "L1 / R1: Move cursor within text\n"
-    "Y: Exit keyboard without saving\n"
-    "Start: Enter (confirm input)";
+    "Y: Cancel without saving\n"
+    "Start: Confirm input";
 
 static const char *cat__kb_help_url =
     "D-Pad: Navigate between keys\n"
@@ -1792,8 +1805,8 @@ static const char *cat__kb_help_url =
     "X: Toggle shortcut alternates\n"
     "L1 / R1: Move cursor within text\n"
     "Select: Toggle Shift (uppercase)\n"
-    "Y: Exit keyboard without saving\n"
-    "Start: Enter (confirm input)\n"
+    "Y: Cancel without saving\n"
+    "Start: Confirm input\n"
     "123/abc: Toggle number/symbol grid";
 
 int cat_keyboard(const char *initial_text, const char *help_text,
@@ -1886,6 +1899,7 @@ int cat_keyboard(const char *initial_text, const char *help_text,
                                  sel ? theme->highlighted_text : theme->hint);
                 }
             }
+            cat__kb_draw_footer();
             cat_present();
     
         }
@@ -2148,7 +2162,7 @@ int cat_keyboard(const char *initial_text, const char *help_text,
             /* Shift */
             {
                 bool sel = (cursor_row == 3 && cursor_col == 0);
-                CAT__KB_DRAW_KEY(cx, row_y, shift_w, key_h, "\xe2\x87\xa7", sel, special_font ? special_font : key_font); /* ⇧ */
+                CAT__KB_DRAW_KEY(cx, row_y, shift_w, key_h, CAT__KB_SHIFT_LABEL, sel, special_font ? special_font : key_font);
                 cx += shift_w + key_spacing;
             }
             /* Character keys */
@@ -2183,13 +2197,7 @@ int cat_keyboard(const char *initial_text, const char *help_text,
 
         #undef CAT__KB_DRAW_KEY
 
-        /* Footer: always show Help hint (built-in instructions available) */
-        {
-            cat_footer_item kb_footer[] = {
-                { .button = CAT_BTN_MENU, .label = "HELP", .is_confirm = false },
-            };
-            cat_draw_footer(kb_footer, 1);
-        }
+        cat__kb_draw_footer();
 
         cat_present();
 
@@ -2253,7 +2261,8 @@ int cat_url_keyboard(const char *initial_text, const char *help_text,
     int total_rows = shortcut_rows + 4; /* url chars + 3 QWERTY rows */
 
     /* Keyboard sizing */
-    int kb_area_h = screen_h * 85 / 100;
+    int footer_h = cat_get_footer_height();
+    int kb_area_h = screen_h * 85 / 100 - footer_h;
     int input_h = screen_h / 10;
     int input_y = (screen_h - kb_area_h - input_h) / 2;
     int input_x = CAT_S(40);
@@ -2539,7 +2548,7 @@ int cat_url_keyboard(const char *initial_text, const char *help_text,
             int cx = (screen_w - row_w) / 2;
             {
                 bool sel = (cursor_row == zxcv_row && cursor_col == 0);
-                CAT__KB_DRAW_KEY2(cx, ry, shift_w, key_h, "\xe2\x87\xa7", sel, special_font ? special_font : key_font); /* ⇧ */
+                CAT__KB_DRAW_KEY2(cx, ry, shift_w, key_h, CAT__KB_SHIFT_LABEL, sel, special_font ? special_font : key_font);
                 cx += shift_w + key_spacing;
             }
             for (int i = 0; i < rn; i++) {
@@ -2555,13 +2564,7 @@ int cat_url_keyboard(const char *initial_text, const char *help_text,
 
         #undef CAT__KB_DRAW_KEY2
 
-        /* Footer: always show Help hint */
-        {
-            cat_footer_item kb_footer[] = {
-                { .button = CAT_BTN_MENU, .label = "HELP", .is_confirm = false },
-            };
-            cat_draw_footer(kb_footer, 1);
-        }
+        cat__kb_draw_footer();
 
         cat_present();
 

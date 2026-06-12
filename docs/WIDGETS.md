@@ -187,7 +187,7 @@ cat_options_list(&opts, &result);
 │  [⇧]  z  x  c  v  b  n  m  [#+=]      │ ← Shift + ZXCV + symbol
 │           [     space     ]           │ ← Space bar
 │                                       │
-│             [MENU] Help               │ ← Footer
+│ [Y] Cancel  [MENU] Help  [START] Confirm│ ← Footer
 └───────────────────────────────────────┘
 ```
 
@@ -200,7 +200,7 @@ cat_options_list(&opts, &result);
 | A | Type selected key / activate special key |
 | B | Backspace |
 | X | Space (general) / Toggle URL shortcuts (URL mode) |
-| Y | Exit without saving |
+| Y | Cancel without saving |
 | Select | Toggle shift |
 | Start | Confirm text |
 | L1 / R1 | Move text cursor left / right |
