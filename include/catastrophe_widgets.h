@@ -1824,7 +1824,9 @@ int cat_keyboard(const char *initial_text, const char *help_text,
 
     TTF_Font *text_font    = cat_get_font(CAT_FONT_MEDIUM);
     TTF_Font *key_font     = cat_get_font(CAT_FONT_MEDIUM);   /* Gabagool: MediumFont for keys */
-    TTF_Font *special_font = cat_get_font(CAT_FONT_LARGE);    /* Gabagool: LargeFont for special keys */
+    /* Special keys (⇧ ← ↵) use the glyph-complete symbol font, not the themed
+       family — lean fonts (Inter, Nunito, Lexend…) lack those symbols. */
+    TTF_Font *special_font = cat_get_symbol_font();
     if (!text_font || !key_font) return CAT_ERROR;
 
     bool is_numeric = (layout == CAT_KB_NUMERIC);
@@ -2238,7 +2240,7 @@ int cat_url_keyboard(const char *initial_text, const char *help_text,
     TTF_Font *text_font    = cat_get_font(CAT_FONT_MEDIUM);
     TTF_Font *key_font     = cat_get_font(CAT_FONT_MEDIUM);
     TTF_Font *shortcut_font = cat_get_font(CAT_FONT_SMALL);
-    TTF_Font *special_font = cat_get_font(CAT_FONT_LARGE);
+    TTF_Font *special_font = cat_get_symbol_font();  /* glyph-complete symbols (⇧ ← ↵) */
     if (!text_font || !key_font) return CAT_ERROR;
 
     /* Use provided shortcuts or defaults */

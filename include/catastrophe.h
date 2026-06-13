@@ -745,6 +745,10 @@ typedef struct {
 
     /* Fonts */
     TTF_Font     *fonts[CAT_FONT_TIER_COUNT];
+    /* Glyph-complete font for UI symbols (keyboard ⇧ ← ↵) the themed family may
+       lack. Loaded lazily from the bundled base font.ttf, family-independent. */
+    TTF_Font     *symbol_font;
+    int           symbol_font_bump;
 
     /* Input state */
     bool          face_buttons_flipped;
@@ -905,6 +909,10 @@ void           cat_finalize_theme_colors(cat_theme *t);
  * ═══════════════════════════════════════════════════════════════════════════ */
 
 TTF_Font      *cat_get_font(cat_font_tier tier);
+/* A glyph-complete font (the bundled base font.ttf) for UI symbols the active
+ * font family may not carry — e.g. the keyboard's ⇧ ← ↵ keys. Sized to the LARGE
+ * tier and follows the font bump. Falls back to the LARGE tier if unavailable. */
+TTF_Font      *cat_get_symbol_font(void);
 int            cat_get_font_bump(void);
 int            cat_set_font_bump(int bump);
 
@@ -2569,6 +2577,46 @@ static int cat__load_fonts(const char *user_font_path) {
 TTF_Font *cat_get_font(cat_font_tier tier) {
     if (tier < 0 || tier >= CAT_FONT_TIER_COUNT) return cat__g.fonts[CAT_FONT_SMALL];
     return cat__g.fonts[tier];
+}
+
+/* Resolve the always-bundled base font.ttf (a glyph-complete Nerd Font) so UI
+ * symbols the themed family lacks still render. Mirrors the font.ttf candidate
+ * search in cat__load_fonts. */
+static bool cat__resolve_symbol_font_path(char *out, size_t out_size) {
+    const char *fd = cat__env_nonempty("CAT_FONTS_DIR");
+    if (fd) {
+        snprintf(out, out_size, "%s/font.ttf", fd);
+        if (access(out, R_OK) == 0) return true;
+    }
+#if defined(PLATFORM_MLP1)
+    char launcher_buf[PATH_MAX];
+    const char *launcher = cat__launcher_path(launcher_buf, sizeof(launcher_buf));
+    if (launcher) {
+        snprintf(out, out_size, "%s/res/font.ttf", launcher);
+        if (access(out, R_OK) == 0) return true;
+    }
+#endif
+    const char *rel[] = { "./res/font.ttf", "../res/font.ttf", "../../res/font.ttf", NULL };
+    for (int i = 0; rel[i]; i++) {
+        snprintf(out, out_size, "%s", rel[i]);
+        if (access(out, R_OK) == 0) return true;
+    }
+    return false;
+}
+
+TTF_Font *cat_get_symbol_font(void) {
+    int bump = cat__g.font_bump;
+    if (!cat__g.symbol_font || cat__g.symbol_font_bump != bump) {
+        if (cat__g.symbol_font) { TTF_CloseFont(cat__g.symbol_font); cat__g.symbol_font = NULL; }
+        char path[PATH_MAX];
+        if (cat__resolve_symbol_font_path(path, sizeof(path))) {
+            int size = cat_font_size_for_resolution(cat__font_base_sizes[CAT_FONT_LARGE] + bump);
+            if (size < 8) size = 8;
+            cat__g.symbol_font = cat__open_font(path, size);
+        }
+        cat__g.symbol_font_bump = bump;
+    }
+    return cat__g.symbol_font ? cat__g.symbol_font : cat_get_font(CAT_FONT_LARGE);
 }
 
 int cat_get_font_bump(void) {
@@ -6934,6 +6982,10 @@ void cat_quit(void) {
             TTF_CloseFont(cat__g.fonts[i]);
             cat__g.fonts[i] = NULL;
         }
+    }
+    if (cat__g.symbol_font) {
+        TTF_CloseFont(cat__g.symbol_font);
+        cat__g.symbol_font = NULL;
     }
 
     /* Close idle-wake evdev fd */
