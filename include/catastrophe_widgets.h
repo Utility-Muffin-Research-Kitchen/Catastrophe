@@ -563,7 +563,8 @@ void cat_draw_list_pane(int x, int y, int w, int h,
  * ═══════════════════════════════════════════════════════════════════════════ */
 
 typedef struct {
-    int offset;   /* vertical scroll offset in pixels (>= 0) */
+    int offset;   /* current (animated) vertical scroll offset in pixels (>= 0) */
+    int target;   /* destination offset input steers toward; offset eases to it */
 } cat_scroll_state;
 
 /* Render callback: draw the full content with its top-left at (x, y). The view
@@ -573,9 +574,10 @@ typedef void (*cat_scroll_content_fn)(int x, int y, int w, void *user);
 
 void cat_scroll_state_init(cat_scroll_state *s);
 
-/* Adjust the scroll offset by delta_px (negative scrolls up). Lower-bounded at
- * 0 here; the upper bound is applied by cat_draw_scroll_view once it knows the
- * viewport and content heights, so this is safe to call freely from input. */
+/* Adjust the scroll target by delta_px (negative scrolls up); the visible offset
+ * eases toward it in cat_draw_scroll_view. Lower-bounded at 0 here; the upper
+ * bound is applied by cat_draw_scroll_view once it knows the viewport and content
+ * heights, so this is safe to call freely from input. */
 void cat_scroll_state_move(cat_scroll_state *s, int delta_px);
 
 /* Draw scrollable content inside (x,y,w,h). content_height is the full natural
@@ -5634,13 +5636,14 @@ void cat_draw_list_pane(int x, int y, int w, int h,
 }
 
 void cat_scroll_state_init(cat_scroll_state *s) {
-    if (s) s->offset = 0;
+    if (s) { s->offset = 0; s->target = 0; }
 }
 
 void cat_scroll_state_move(cat_scroll_state *s, int delta_px) {
     if (!s) return;
-    s->offset += delta_px;
-    if (s->offset < 0) s->offset = 0;
+    /* Steer the target; cat_draw_scroll_view eases the visible offset toward it. */
+    s->target += delta_px;
+    if (s->target < 0) s->target = 0;
 }
 
 void cat_draw_scroll_view(int x, int y, int w, int h, int content_height,
@@ -5650,6 +5653,19 @@ void cat_draw_scroll_view(int x, int y, int w, int h, int content_height,
 
     int max_offset = content_height - h;
     if (max_offset < 0) max_offset = 0;
+    if (state->target < 0) state->target = 0;
+    if (state->target > max_offset) state->target = max_offset;
+
+    /* Ease the visible offset toward the input-driven target: a quarter of the
+       remaining distance each frame (1px floor so it always lands), requesting
+       frames until it settles. Snappy but smooth — no hard jumps. */
+    if (state->offset != state->target) {
+        int diff = state->target - state->offset;
+        int step = diff / 4;
+        if (step == 0) step = (diff > 0) ? 1 : -1;
+        state->offset += step;
+        cat_request_frame();
+    }
     if (state->offset < 0) state->offset = 0;
     if (state->offset > max_offset) state->offset = max_offset;
 
