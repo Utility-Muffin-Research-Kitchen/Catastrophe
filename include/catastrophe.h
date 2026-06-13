@@ -3529,6 +3529,11 @@ static uint32_t cat__next_wake_time(void) {
 }
 
 void cat_present(void) {
+    /* When a view is being rendered into an offscreen target (e.g. a transition
+       snapshot), the caller is capturing pixels, not drawing the live frame —
+       don't present or pace. */
+    if (SDL_GetRenderTarget(cat__g.renderer) != NULL) return;
+
     SDL_RenderPresent(cat__g.renderer);
 
     if (cat__g.needs_frame) {
