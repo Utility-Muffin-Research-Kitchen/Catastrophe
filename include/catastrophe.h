@@ -1628,7 +1628,16 @@ void cat_finalize_theme_colors(cat_theme *t) {
     if (!t) return;
 
     int hl_lum = (t->highlight.r * 299 + t->highlight.g * 587 + t->highlight.b * 114) / 1000;
-    t->highlighted_text = (hl_lum > 140) ? t->background : t->text;
+    int text_lum = (t->text.r * 299 + t->text.g * 587 + t->text.b * 114) / 1000;
+    int bg_lum   = (t->background.r * 299 + t->background.g * 587 + t->background.b * 114) / 1000;
+    /* Selected-row text auto-contrast: pick whichever of text/background reads on
+       the highlight pill -- the darker of the two on a bright pill, the lighter on
+       a dark one. Handles light schemes (text dark / bg light) as well as dark
+       ones; for dark schemes the result is unchanged. */
+    if (hl_lum > 140)
+        t->highlighted_text = (text_lum <= bg_lum) ? t->text : t->background;
+    else
+        t->highlighted_text = (text_lum >= bg_lum) ? t->text : t->background;
 
     cat_set_tab_text_colors(
         cat_color_rgba(t->hint.r, t->hint.g, t->hint.b, 0xFF),
