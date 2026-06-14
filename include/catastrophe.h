@@ -5975,7 +5975,17 @@ void cat_draw_status_bar(cat_status_bar_opts *opts) {
 
     int pill_h = CAT_DS(CAT__PILL_SIZE);
     int pill_y = opts->use_y ? opts->y_position : padding;
-    int pill_x = cat__g.screen_w - padding - pill_w;
+    /* Right inset. For the inline (no-pill) status bar drawn over the tab bar,
+       land the last element's right edge at screen_w - CAT_S(16) so the status
+       cluster is symmetric with the leftmost tab / page-title left inset (also
+       CAT_S(16)). pill_w already carries a trailing inter-element margin, so
+       subtract it here. Pill contexts keep the original outer padding. */
+    int right_inset = padding;
+    if (opts->no_pill) {
+        right_inset = CAT_S(16) - margin;
+        if (right_inset < 0) right_inset = 0;
+    }
+    int pill_x = cat__g.screen_w - right_inset - pill_w;
 
     if (!opts->no_pill)
         cat_draw_pill(pill_x, pill_y, pill_w, pill_h, cat__g.theme.accent);
