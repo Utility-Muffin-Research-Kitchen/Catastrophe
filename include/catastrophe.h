@@ -983,6 +983,16 @@ int            cat_draw_text_wrapped(TTF_Font *font, const char *text, int x, in
 int            cat_measure_text(TTF_Font *font, const char *text);
 int            cat_measure_text_ellipsized(TTF_Font *font, const char *text, int max_w); /* measure width text would occupy when ellipsized to fit max_w */
 void           cat_draw_image(SDL_Texture *tex, int x, int y, int w, int h);
+
+/* Device-type glyphs carried in the status-asset atlas (e.g. for the Bluetooth
+   device list). Monochrome, recolored to any theme color when drawn. */
+typedef enum {
+    CAT_DEVICE_ICON_BLUETOOTH = 0,   /* generic / unknown device */
+    CAT_DEVICE_ICON_HEADSET,         /* headphones */
+    CAT_DEVICE_ICON_CONTROLLER,      /* gamepad */
+} cat_device_icon;
+int            cat_device_icon_px(void); /* native draw size (square) in px; 0 if the atlas is unavailable */
+int            cat_draw_device_icon(cat_device_icon icon, int x, int y, cat_draw_color color); /* draw at (x,y) top-left; returns drawn size in px (0 if unavailable) */
 /* Draw an image clipped to a rounded rectangle, rounding only the corners in the
    CAT_CORNER_* mask (so it can match a list pill's shape). Uses a scratch render
    target to multiply the image's alpha by the rounded mask; falls back to a plain
@@ -5571,6 +5581,26 @@ static void cat__blit_status_icon(int src_x, int src_y, int src_w, int src_h,
     SDL_SetTextureColorMod(cat__g.status_assets, tint.r, tint.g, tint.b);
     SDL_SetTextureAlphaMod(cat__g.status_assets, tint.a);
     SDL_RenderCopy(cat__g.renderer, cat__g.status_assets, &src, &dst);
+}
+
+int cat_device_icon_px(void) {
+    return cat__g.status_assets ? (12 * cat__g.status_asset_scale) : 0;
+}
+
+int cat_draw_device_icon(cat_device_icon icon, int x, int y, cat_draw_color color) {
+    if (!cat__g.status_assets) {
+        return 0;
+    }
+    /* 1x atlas slots (see scripts/generate_assets_atlas.py). */
+    int src_x = 53, src_y = 104;             /* ASSET_BLUETOOTH (generic) */
+    if (icon == CAT_DEVICE_ICON_HEADSET) {
+        src_x = 79;                          /* ASSET_AUDIO (headphones) */
+    } else if (icon == CAT_DEVICE_ICON_CONTROLLER) {
+        src_x = 92;                          /* ASSET_CONTROLLER (gamepad) */
+    }
+    int px = 12 * cat__g.status_asset_scale;
+    cat__blit_status_icon(src_x, src_y, 12, 12, x, y, px, px, color);
+    return px;
 }
 
 /* ─── Status bar ─────────────────────────────────────────────────────────── */
