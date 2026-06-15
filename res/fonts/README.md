@@ -1,16 +1,29 @@
 # Bundled fonts
 
+Selectable UI families (Settings > Appearance > Layout > Font). Nunito is the
+default. All ten are SIL Open Font License 1.1; the license text lives in
+`OFL.txt` (or `LICENSE.txt`) inside each family folder.
+
 | Family | Weight(s) | License | Use |
 |---|---|---|---|
-| Inter | Regular | OFL 1.1 | Default Latin UI font (legacy `font.ttf`) |
-| Space Grotesk | Regular / Medium / Bold | OFL 1.1 | Latin UI font for Jawaka themes |
-| Source Han Sans CN | Heavy | OFL 1.1 | CJK fallback font (`cjk_font` slot) |
+| Space Grotesk | Regular / Medium / Bold | OFL 1.1 | UI family |
+| Inter | Regular | OFL 1.1 | UI family (also the legacy `font.ttf` slot name) |
+| Rounded M+ | Bold | OFL 1.1 | UI family |
+| Nunito | Bold | OFL 1.1 | Default UI family |
+| Baloo 2 | Bold | OFL 1.1 | UI family |
+| Fredoka | Bold | OFL 1.1 | UI family |
+| Lexend | Bold | OFL 1.1 | UI family |
+| IBM Plex Sans | Bold | OFL 1.1 | UI family |
+| Noto Sans | Bold | OFL 1.1 | UI family |
+| Source Han Sans CN | Heavy | OFL 1.1 | CJK fallback (`cjk_font` slot) |
 
-All fonts are SIL Open Font License 1.1 — free to bundle and redistribute.
-License text lives in `OFL.txt` (or `LICENSE.txt`) inside each family folder.
+## Symbol fallback (`font.ttf`)
 
-Space Grotesk includes U+21E7 (⇧) copied from the bundled Inter/default font so
-Catastrophe's on-screen keyboard shift key renders in Jawaka themes.
+The always-bundled base `font.ttf` is **RoundedMplus 1c Nerd Font** - a Nerd
+Fonts-patched build of Rounded M+. `cat_get_symbol_font` falls back to it so UI
+symbols the themed family lacks (keyboard glyphs like the shift arrow) still
+render in every theme. The underlying Rounded M+ is OFL 1.1; the Nerd Fonts
+glyph patch is MIT.
 
 ## Referencing fonts from a stylesheet
 
