@@ -17,6 +17,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **File Picker widget** (`catastrophe_widgets.h`): new `cat_file_picker` widget for browsing the filesystem and selecting files or directories. Features: configurable mode (files only, directories only, or both), sorted directory listing with folders first, visual folder/file differentiation via trailing chevron `>` and uppercase extension labels, inline folder creation in dir-capable modes via `cat_keyboard()`, extension filtering, hidden-file option, and enforced rooted browsing (`SDCARD_PATH` on device, `$HOME` by default on desktop, or a caller-provided `root_path`). Demo entries added for all three modes.
 - **Live footer demo** (`examples/demo/main.c`, `docs/DEMO_COVERAGE.md`): added a `Live Footer` list demo that simulates preview state, updates the `Y` footer label while the cursor moves, and uses `cat_request_frame_in(100)` so the label reverts automatically when preview expires.
 - **Generated status/control atlas** (`res/assets/`, `scripts/generate_assets_atlas.py`, `Makefile`): added a tracked MIT-compatible replacement for the old NextUI preview sprites, plus `make assets` for deterministic regeneration.
+- **Box fill helper** (`catastrophe.h`): `cat_box_fit_rows()` computes how many whole rows fill a `cat_box` and the row height to use, so list panes render a filled grid — the list length never changes the row geometry. A cached fit count is clamped to the available rows.
+- **Device-type glyphs** (`catastrophe.h`, `res/assets/`): `cat_draw_device_icon()` / `cat_device_icon_px()` draw a device-type icon (headset, controller, phone, keyboard, and so on) from the status atlas, for marking entries such as a Bluetooth device list.
+- **Bluetooth status-bar indicator** (`catastrophe.h`): the status bar can show a Bluetooth state icon (off / on / connected), blitted from its generator-atlas slot.
+- **Downscaled-thumbnail image loading** (`catastrophe.h`): load images pre-scaled to a target box for cheaper thumbnails.
+- **Seven more bundled font families** (`res/fonts/`, `README.md`): added Rounded M+, Nunito, Baloo 2, Fredoka, Lexend, IBM Plex Sans, and Noto Sans (all SIL OFL 1.1) alongside Space Grotesk and Source Han Sans. Corrected the bundled-font README: the base symbol `font.ttf` is a RoundedMplus 1c Nerd Font (Nerd Fonts glyph patch, MIT, over OFL Rounded M+), not Inter.
 
 ### Changed
 
@@ -32,12 +37,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Options list long-value truncation** (`catastrophe_widgets.h`, `docs/API.md`, `docs/WIDGETS.md`): `cat_options_list()` now applies the same width budgeting to focused and unfocused rows, ellipsizes long right-side values instead of letting them overlap labels, and keeps the clickable-row chevron `>` visible in both states.
 - **Options list demo regression coverage** (`examples/demo/main.c`, `docs/DEMO_COVERAGE.md`): the `Options List` demo now includes long clickable path/URL rows so 640x480 layouts exercise both long-value truncation and long label+value splitting.
 - **Selection wrapped-message layout** (`catastrophe_widgets.h`, `examples/demo/main.c`, `docs/DEMO_COVERAGE.md`): `cat_selection()` now places its option pills below the full wrapped message height instead of assuming a single text line, preventing overlap on narrow layouts and adding demo coverage for the wrapped-prompt case.
+- **Scroll view eases to its target** (`catastrophe_widgets.h`): `cat_draw_scroll_view` now animates the offset toward an input-driven target instead of jumping in discrete steps, for smooth scrolling (e.g. a long About/credits page). Self-driving via `cat_request_frame` while it settles.
+- **Refined on-screen keyboard footer controls** (`catastrophe.h`): tidied the keyboard's footer hint controls.
 
 ### Fixed
 
 - **Status-bar 12-hour clock leading zero** (`catastrophe.h`): 12-hour clock modes (with and without AM/PM) no longer pad the hour with a leading zero — e.g. `9:05 AM` / `9:05` instead of `09:05`. 24-hour mode keeps its leading zero. Width-measure and draw now share a single `cat__format_clock()` helper.
 - **MLP1 warning cleanup** (`catastrophe.h`): stylesheet wallpaper path formatting now uses a bounded buffer sized for the full theme directory/name/wallpaper path and checks `snprintf()` before reloading the background. Platform sysfs and power-command helpers are now compiled only for the backends that use them, avoiding unused-helper warnings without broad warning suppression.
 - **macOS native link** (`Makefile`): link desktop examples with Cocoa so the window activation helper resolves Objective-C runtime symbols.
+- **Light-theme selected-row contrast** (`catastrophe.h`): `cat_finalize_theme_colors()` now picks the darker/lighter of the text/background colors for the selected-row text instead of assuming a dark theme, so light color schemes render a readable selection. Dark schemes are unchanged.
+- **Inline status-bar right inset** (`catastrophe.h`): the no-pill (inline) status bar now lands its last element at `screen_w - CAT_S(16)`, matching the tab bar's left inset, instead of sitting ~14px farther from the right edge.
+- **No present while rendering offscreen** (`catastrophe.h`): `cat_present()` is skipped while drawing into an offscreen render target (e.g. a tab-slide snapshot), avoiding a stray flip mid-composite.
+- **Keyboard symbol glyphs** (`catastrophe.h`): the on-screen keyboard's special keys (shift, enter, arrows) render from a glyph-complete symbol font so they no longer show as tofu in themed UI fonts that lack those code points.
 
 ## [v1.1.0] - 2026-03-30
 
