@@ -2610,9 +2610,10 @@ static bool cat__resolve_symbol_font_path(char *out, size_t out_size) {
 #if defined(PLATFORM_MLP1)
     char launcher_buf[PATH_MAX];
     const char *launcher = cat__launcher_path(launcher_buf, sizeof(launcher_buf));
-    if (launcher) {
-        snprintf(out, out_size, "%s/res/font.ttf", launcher);
-        if (access(out, R_OK) == 0) return true;
+    if (launcher &&
+        snprintf(out, out_size, "%s/res/font.ttf", launcher) < (int)out_size &&
+        access(out, R_OK) == 0) {
+        return true;
     }
 #endif
     const char *rel[] = { "./res/font.ttf", "../res/font.ttf", "../../res/font.ttf", NULL };
