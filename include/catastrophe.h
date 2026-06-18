@@ -749,6 +749,9 @@ typedef struct {
        lack. Loaded lazily from the bundled base font.ttf, family-independent. */
     TTF_Font     *symbol_font;
     int           symbol_font_bump;
+    /* Same glyph-complete base font, sized for footer/hint pills (not LARGE). */
+    TTF_Font     *symbol_font_small;
+    int           symbol_font_small_bump;
 
     /* Input state */
     bool          face_buttons_flipped;
@@ -798,6 +801,9 @@ typedef struct {
     bool          footer_overflow_swallow[CAT_BTN_COUNT];
     cat_footer_item footer_hidden_items[CAT__MAX_FOOTER_ITEMS];
     int            footer_hidden_count;
+    /* One-shot alpha (0 = opaque default) for the NEXT cat_draw_footer's pill
+       backgrounds; auto-resets after that draw so it never leaks to other footers. */
+    int            footer_bg_opacity;
 
     /* Texture cache */
     cat_texture_cache tex_cache;
@@ -1122,6 +1128,9 @@ void           cat_cache_clear(void);
  * ═══════════════════════════════════════════════════════════════════════════ */
 
 void           cat_draw_footer(cat_footer_item *items, int count);
+/* Set a one-shot alpha (1..255) for the next cat_draw_footer's pill backgrounds
+   (text stays opaque). 0 restores the opaque default. Auto-resets after the draw. */
+void           cat_set_footer_bg_opacity(int alpha);
 int            cat_get_footer_height(void);
 void           cat_set_footer_overflow_opts(const cat_footer_overflow_opts *opts);
 void           cat_get_footer_overflow_opts(cat_footer_overflow_opts *out);
@@ -2637,6 +2646,24 @@ TTF_Font *cat_get_symbol_font(void) {
         cat__g.symbol_font_bump = bump;
     }
     return cat__g.symbol_font ? cat__g.symbol_font : cat_get_font(CAT_FONT_LARGE);
+}
+
+/* Footer/hint-sized symbol font: the same glyph-complete base font.ttf as
+   cat_get_symbol_font, but at CAT_FONT_SMALL so it fits a footer pill (LARGE is
+   too tall there). Used for footer button glyphs the themed family lacks. */
+static TTF_Font *cat__get_symbol_font_small(void) {
+    int bump = cat__g.font_bump;
+    if (!cat__g.symbol_font_small || cat__g.symbol_font_small_bump != bump) {
+        if (cat__g.symbol_font_small) { TTF_CloseFont(cat__g.symbol_font_small); cat__g.symbol_font_small = NULL; }
+        char path[PATH_MAX];
+        if (cat__resolve_symbol_font_path(path, sizeof(path))) {
+            int size = cat_font_size_for_resolution(cat__font_base_sizes[CAT_FONT_SMALL] + bump);
+            if (size < 8) size = 8;
+            cat__g.symbol_font_small = cat__open_font(path, size);
+        }
+        cat__g.symbol_font_small_bump = bump;
+    }
+    return cat__g.symbol_font_small ? cat__g.symbol_font_small : cat_get_font(CAT_FONT_SMALL);
 }
 
 int cat_get_font_bump(void) {
@@ -4735,8 +4762,23 @@ static bool cat__footer_button_text_is_single_codepoint(const char *text) {
     return cat__utf8_codepoint_count(text) == 1;
 }
 
+static bool cat__text_has_non_ascii(const char *s) {
+    for (; s && *s; s++) if ((unsigned char)*s & 0x80u) return true;
+    return false;
+}
+
+/* Scale a footer pill-background colour by the one-shot footer opacity (0 = opaque). */
+static cat_draw_color cat__footer_bg(cat_draw_color c) {
+    int op = cat__g.footer_bg_opacity;
+    if (op > 0 && op < 255) c.a = (Uint8)((int)c.a * op / 255);
+    return c;
+}
+
 static TTF_Font *cat__footer_button_font(const char *btn_name) {
     if (!btn_name || !btn_name[0]) return cat_get_font(CAT_FONT_SMALL);
+    if (cat__text_has_non_ascii(btn_name)) {
+        return cat__get_symbol_font_small(); /* arrows/symbols the themed family lacks */
+    }
     if (cat__footer_button_text_is_single_codepoint(btn_name)) {
         return cat_get_font(CAT_FONT_MEDIUM); /* single-codepoint button label */
     }
@@ -4793,7 +4835,7 @@ static void cat__footer_draw_item(int *cx, int btn_y, int inner_h, int btn_margi
         ? CAT_DS(CAT__BUTTON_SIZE)
         : (CAT_DS(CAT__BUTTON_SIZE) / 2 + btn_tw);
 
-    cat_draw_pill(*cx, btn_y, btn_pill_w, inner_h, cat__g.theme.button_glyph_bg);
+    cat_draw_pill(*cx, btn_y, btn_pill_w, inner_h, cat__footer_bg(cat__g.theme.button_glyph_bg));
     cat_draw_text(btn_font, btn_name,
                  *cx + (btn_pill_w - btn_tw) / 2,
                  btn_y + (inner_h - btn_font_h) / 2,
@@ -4805,6 +4847,10 @@ static void cat__footer_draw_item(int *cx, int btn_y, int inner_h, int btn_margi
                  btn_y + (inner_h - hint_font_h) / 2,
                  cat__g.theme.hint);
     *cx += cat_measure_text(hint_font, label) + btn_margin;
+}
+
+void cat_set_footer_bg_opacity(int alpha) {
+    cat__g.footer_bg_opacity = alpha < 0 ? 0 : (alpha > 255 ? 255 : alpha);
 }
 
 static void cat__footer_store_hidden_item(cat_footer_item *item) {
@@ -4927,7 +4973,7 @@ void cat_draw_footer(cat_footer_item *items, int count) {
     }
 
     if (left_outer_w > 0) {
-        cat_draw_pill(padding, pill_y, left_outer_w, outer_h, cat__g.theme.accent);
+        cat_draw_pill(padding, pill_y, left_outer_w, outer_h, cat__footer_bg(cat__g.theme.accent));
         int cx = padding + outer_pad;
         int btn_y = pill_y + btn_margin; /* buttons inset by BUTTON_MARGIN from pill top */
         for (int i = 0; i < left_visible_count; i++) {
@@ -4949,7 +4995,7 @@ void cat_draw_footer(cat_footer_item *items, int count) {
 
     if (right_visible_count > 0 && right_outer_w > 0) {
         int rx = cat__g.screen_w - padding - right_outer_w;
-        cat_draw_pill(rx, pill_y, right_outer_w, outer_h, cat__g.theme.accent);
+        cat_draw_pill(rx, pill_y, right_outer_w, outer_h, cat__footer_bg(cat__g.theme.accent));
         int cx = rx + outer_pad;
         int btn_y = pill_y + btn_margin;
         for (int i = right_visible_start; i < right_count; i++) {
@@ -4958,6 +5004,8 @@ void cat_draw_footer(cat_footer_item *items, int count) {
                                  &items[right_indices[i]]);
         }
     }
+
+    cat__g.footer_bg_opacity = 0;   /* one-shot: never leak to the next footer */
 }
 
 static void cat__footer_overflow_show_hidden_actions(void) {
@@ -7041,6 +7089,10 @@ void cat_quit(void) {
     if (cat__g.symbol_font) {
         TTF_CloseFont(cat__g.symbol_font);
         cat__g.symbol_font = NULL;
+    }
+    if (cat__g.symbol_font_small) {
+        TTF_CloseFont(cat__g.symbol_font_small);
+        cat__g.symbol_font_small = NULL;
     }
 
     /* Close idle-wake evdev fd */
