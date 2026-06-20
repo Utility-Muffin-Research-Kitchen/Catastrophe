@@ -431,6 +431,10 @@ typedef void (*cat_queue_cancel_fn)(void *userdata);
  * Only shown when no PENDING or RUNNING items exist. */
 typedef void (*cat_queue_clear_fn)(void *userdata);
 
+/* Optional one-line live summary. The widget supplies a fallback summary when
+ * unset or when the callback leaves buf empty. */
+typedef void (*cat_queue_summary_fn)(char *buf, size_t buf_size, void *userdata);
+
 typedef struct {
     const char           *title;       /* Screen title, e.g. "DOWNLOADS" */
     cat_queue_snapshot_fn  snapshot;    /* Required: fills items each frame */
@@ -442,6 +446,7 @@ typedef struct {
     cat_status_bar_opts   *status_bar;  /* Optional: top-right status pill */
     bool                  hide_filter; /* Set true to suppress Y=FILTER button */
     const char           *filter_labels[4]; /* Optional labels for filters: [0]=ALL, [1]=PENDING||RUNNING (default "IN PROGRESS"), [2]=DONE||SKIPPED, [3]=FAILED; NULL or "" entries use defaults */
+    cat_queue_summary_fn   summary;     /* Optional: one-line summary bar text */
 } cat_queue_opts;
 
 /* Runs the queue viewer event loop. Returns CAT_OK when user exits (B). */
@@ -5213,14 +5218,22 @@ int cat_queue_viewer(const cat_queue_opts *opts) {
             SDL_RenderFillRect(rend, &sep_rect);
             SDL_SetRenderDrawBlendMode(rend, prev_blend);
 
-            char summary[128];
-            snprintf(summary, sizeof(summary), "%d/%d COMPLETE, %d FAILED",
-                     stat_done, stat_total, stat_failed);
+            char summary[192];
+            summary[0] = '\0';
+            if (opts->summary)
+                opts->summary(summary, sizeof(summary), opts->userdata);
+            if (!summary[0]) {
+                snprintf(summary, sizeof(summary), "%d/%d COMPLETE, %d FAILED",
+                         stat_done, stat_total, stat_failed);
+            }
+            int summary_w = screen_w - margin * 2;
             int sw = cat_measure_text(layout_sub_font, summary);
-            cat_draw_text(layout_sub_font, summary,
-                         (screen_w - sw) / 2,
-                         sep_y + (layout_summary_h - layout_sub_fh) / 2,
-                         theme->hint);
+            int sx = (screen_w - sw) / 2;
+            if (sw > summary_w) sx = margin;
+            cat_draw_text_ellipsized(layout_sub_font, summary,
+                                     sx,
+                                     sep_y + (layout_summary_h - layout_sub_fh) / 2,
+                                     theme->hint, summary_w);
         }
 
         /* Footer */
