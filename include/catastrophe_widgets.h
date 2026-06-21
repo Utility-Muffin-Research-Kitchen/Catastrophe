@@ -304,6 +304,7 @@ typedef struct {
     bool               center_title;           /* Center the screen title (default: left-aligned) */
     bool               show_section_separator;  /* Draw accent line under section headers (default: off) */
     const cat_draw_color *key_color;           /* Override info pair key color (default: NULL = theme->hint) */
+    const cat_draw_color *section_title_color; /* Override section header color (default: NULL = theme->accent) */
     TTF_Font          *body_font;              /* Override body/value text (default: CAT_FONT_TINY) */
     TTF_Font          *section_title_font;     /* Override section headers (default: CAT_FONT_SMALL) */
     TTF_Font          *key_font;               /* Override info-pair key text (default: CAT_FONT_TINY) */
@@ -1498,28 +1499,34 @@ int cat_options_list(cat_options_list_opts *opts, cat_options_list_result *resul
                     label_color,
                     max_label_w);
 
+                int vfh   = TTF_FontHeight(value_font);
+                int tri_h = vfh * 6 / 10;
+                int tri_w = vfh * 5 / 10;
+                int tri_y = value_y + (vfh - tri_h) / 2;
+                int tri_gap = CAT_S(8);
                 if (show_standard_arrows) {
-                    int right_arrow_x = content_right - arrow_w;
-                    int value_right = right_arrow_x - CAT_S(4);
-                    int value_x = value_right - draw_value_w;
+                    int right_tri_x = content_right - arrow_w + (arrow_w - tri_w) / 2;
+                    int value_right = right_tri_x - tri_gap;
+                    int value_x     = value_right - draw_value_w;
+                    int left_tri_x  = value_x - tri_gap - tri_w;
 
-                    cat_draw_text(value_font, "<", value_x - arrow_w, value_y, value_color);
+                    cat_draw_triangle(left_tri_x, tri_y, tri_w, tri_h, CAT_DIR_LEFT, value_color);
                     if (draw_value_w > 0) {
                         cat_draw_text_ellipsized(value_font, value,
                             value_x, value_y, value_color, max_value_w);
                     }
-                    cat_draw_text(value_font, ">", right_arrow_x, value_y, value_color);
+                    cat_draw_triangle(right_tri_x, tri_y, tri_w, tri_h, CAT_DIR_RIGHT, value_color);
                 } else if (show_click_arrow) {
                     int arrow_x = content_right - CAT_S(16);
 
                     if (draw_value_w > 0) {
                         cat_draw_text_ellipsized(value_font, value,
-                            arrow_x - CAT_S(4) - draw_value_w,
+                            arrow_x - tri_gap - draw_value_w,
                             value_y,
                             value_color,
                             max_value_w);
                     }
-                    cat_draw_text(value_font, ">", arrow_x, value_y, value_color);
+                    cat_draw_triangle(arrow_x, tri_y, tri_w, tri_h, CAT_DIR_RIGHT, value_color);
                 } else if (draw_value_w > 0) {
                     cat_draw_text_ellipsized(value_font, value,
                         content_right - draw_value_w,
@@ -3165,7 +3172,9 @@ int cat_detail_screen(cat_detail_opts *opts, cat_detail_result *result) {
 
             /* Section title */
             if (sec->title) {
-                cat_draw_text(section_font, sec->title, margin, draw_y, theme->accent);
+                cat_draw_color sec_title_c = opts->section_title_color
+                    ? *opts->section_title_color : theme->accent;
+                cat_draw_text(section_font, sec->title, margin, draw_y, sec_title_c);
                 if (opts->show_section_separator) {
                     int line_y = draw_y + TTF_FontLineSkip(section_font) + CAT_S(2);
                     SDL_SetRenderDrawColor(cat_get_renderer(),
