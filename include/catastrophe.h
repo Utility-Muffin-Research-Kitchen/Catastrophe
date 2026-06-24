@@ -379,6 +379,9 @@ typedef struct cat_theme {
     cat_draw_color text;              /* Default text color */
     cat_draw_color highlighted_text;  /* Text on highlighted/selected items */
     cat_draw_color hint;              /* Help text, dim text */
+    cat_draw_color emphasis;          /* Section headings / status — the highlight hue,
+                                         luminance-clamped to read on the background
+                                         (computed in cat_finalize_theme_colors) */
     cat_draw_color background;        /* Screen background color */
     char     font_path[512];    /* Primary font file path */
     char     bg_image_path[512];/* Background image path (PNG) */
@@ -1633,6 +1636,41 @@ void cat_set_tab_text_colors(cat_color inactive, cat_color selected) {
     cat__g.stylesheet.ui.tab_selected_color = selected;
 }
 
+/* WCAG relative luminance (0..1) of an sRGB color. */
+static double cat__rel_lum(cat_draw_color c) {
+    double ch[3] = { c.r / 255.0, c.g / 255.0, c.b / 255.0 };
+    for (int i = 0; i < 3; i++)
+        ch[i] = (ch[i] <= 0.03928) ? (ch[i] / 12.92)
+                                   : pow((ch[i] + 0.055) / 1.055, 2.4);
+    return 0.2126 * ch[0] + 0.7152 * ch[1] + 0.0722 * ch[2];
+}
+
+/* WCAG contrast ratio (1..21) between two colors. */
+static double cat__contrast_ratio(cat_draw_color a, cat_draw_color b) {
+    double la = cat__rel_lum(a), lb = cat__rel_lum(b);
+    if (la < lb) { double tmp = la; la = lb; lb = tmp; }
+    return (la + 0.05) / (lb + 0.05);
+}
+
+/* Blend `fg` toward the black/white extreme that yields the most contrast with
+   `bg`, stopping as soon as `target` is met (clamped at the extreme otherwise).
+   Toward black preserves hue+saturation (just darker — best for light schemes);
+   toward white desaturates (for dark schemes). Alpha is preserved. */
+static cat_draw_color cat__contrast_clamp(cat_draw_color fg, cat_draw_color bg, double target) {
+    if (cat__contrast_ratio(fg, bg) >= target) return fg;
+    /* contrast-to-black == contrast-to-white where bg luminance ~= 0.179. */
+    double anchor = (cat__rel_lum(bg) > 0.179) ? 0.0 : 255.0;
+    cat_draw_color out = fg;
+    for (int step = 1; step <= 20; step++) {
+        double k = step / 20.0;
+        out.r = (uint8_t)(fg.r + (anchor - fg.r) * k + 0.5);
+        out.g = (uint8_t)(fg.g + (anchor - fg.g) * k + 0.5);
+        out.b = (uint8_t)(fg.b + (anchor - fg.b) * k + 0.5);
+        if (cat__contrast_ratio(out, bg) >= target) break;
+    }
+    return out;
+}
+
 void cat_finalize_theme_colors(cat_theme *t) {
     if (!t) return;
 
@@ -1647,6 +1685,13 @@ void cat_finalize_theme_colors(cat_theme *t) {
         t->highlighted_text = (text_lum <= bg_lum) ? t->text : t->background;
     else
         t->highlighted_text = (text_lum >= bg_lum) ? t->text : t->background;
+
+    /* Emphasis = the theme identity (highlight) hue, luminance-clamped so section
+       headings and status text read against the background on every scheme. The
+       raw highlight is bright-on-dark (great on dark schemes) but light-on-light
+       (near-invisible on light ones); clamping fixes the light schemes while
+       leaving the dark ones untouched. */
+    t->emphasis = cat__contrast_clamp(t->highlight, t->background, 4.5);
 
     cat_set_tab_text_colors(
         cat_color_rgba(t->hint.r, t->hint.g, t->hint.b, 0xFF),

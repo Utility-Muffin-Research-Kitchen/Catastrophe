@@ -304,7 +304,7 @@ typedef struct {
     bool               center_title;           /* Center the screen title (default: left-aligned) */
     bool               show_section_separator;  /* Draw accent line under section headers (default: off) */
     const cat_draw_color *key_color;           /* Override info pair key color (default: NULL = theme->hint) */
-    const cat_draw_color *section_title_color; /* Override section header color (default: NULL = theme->accent) */
+    const cat_draw_color *section_title_color; /* Override section header color (default: NULL = theme->emphasis) */
     TTF_Font          *body_font;              /* Override body/value text (default: CAT_FONT_TINY) */
     TTF_Font          *section_title_font;     /* Override section headers (default: CAT_FONT_SMALL) */
     TTF_Font          *key_font;               /* Override info-pair key text (default: CAT_FONT_TINY) */
@@ -3173,7 +3173,7 @@ int cat_detail_screen(cat_detail_opts *opts, cat_detail_result *result) {
             /* Section title */
             if (sec->title) {
                 cat_draw_color sec_title_c = opts->section_title_color
-                    ? *opts->section_title_color : theme->accent;
+                    ? *opts->section_title_color : theme->emphasis;
                 cat_draw_text(section_font, sec->title, margin, draw_y, sec_title_c);
                 if (opts->show_section_separator) {
                     int line_y = draw_y + TTF_FontLineSkip(section_font) + CAT_S(2);
