@@ -2876,17 +2876,22 @@ int cat_process_message(cat_process_opts *opts, cat_process_fn fn, void *userdat
         int center_y = screen_h / 2;
 
         /* Static message */
+        int msg_y = center_y - CAT_S(60);
+        int msg_h = 0;
         if (opts->message) {
             cat_draw_text_wrapped(msg_font, opts->message,
-                CAT_S(40), center_y - CAT_S(60),
+                CAT_S(40), msg_y,
                 screen_w - CAT_S(80),
                 theme->text, CAT_ALIGN_CENTER);
+            msg_h = cat_measure_wrapped_text_height(msg_font, opts->message,
+                                                    screen_w - CAT_S(80));
         }
 
-        /* Dynamic message */
+        /* Dynamic message — placed below the message's actual bottom plus a gap,
+           so the two lines never crowd regardless of font size or wrapping. */
         int dyn_line_h = dyn_font ? TTF_FontHeight(dyn_font) : CAT_S(16);
         int dyn_lines = opts->dynamic_message ? (opts->message_lines > 0 ? opts->message_lines : 1) : 0;
-        int dyn_y = center_y - CAT_S(20);
+        int dyn_y = msg_y + (msg_h > 0 ? msg_h + CAT_S(14) : CAT_S(40));
 
         if (opts->dynamic_message && *opts->dynamic_message) {
             cat_draw_text_wrapped(dyn_font, *opts->dynamic_message,
@@ -2917,16 +2922,21 @@ int cat_process_message(cat_process_opts *opts, cat_process_fn fn, void *userdat
             cat_request_frame_in(33); /* ~30fps is sufficient for a progress bar */
         }
 
-        /* Spinner (simple dots animation when no progress bar) */
+        /* Spinner (simple dots animation when no progress bar) — sits below the
+           dynamic message line when present, with the same gap the progress bar
+           uses, so it never crowds the name above it. */
         if (!opts->show_progress || !opts->progress) {
             uint32_t ticks = SDL_GetTicks() / 300;
             int dots = (ticks % 4);
             char spinner[8] = "";
             for (int i = 0; i < dots; i++) strcat(spinner, ".");
             int sw = cat_measure_text(msg_font, spinner);
+            int spin_y = (dyn_lines > 0)
+                ? dyn_y + dyn_lines * dyn_line_h + CAT_S(16)
+                : center_y + CAT_S(20);
             cat_draw_text(msg_font, spinner,
                 (screen_w - sw) / 2,
-                center_y + CAT_S(20),
+                spin_y,
                 theme->hint);
             cat_request_frame_in(300);
         }
@@ -3019,6 +3029,11 @@ int cat_detail_screen(cat_detail_opts *opts, cat_detail_result *result) {
     int *section_val_x    = n_sections ? (int *)calloc((size_t)n_sections, sizeof(int)) : NULL;
     if (n_sections > 0 && (!section_total_h || !section_kw_max || !section_val_w || !section_val_x)) {
         free(section_total_h); free(section_kw_max); free(section_val_w); free(section_val_x);
+        if (section_images) {
+            for (int s = 0; s < opts->section_count; s++) {
+                if (section_images[s]) SDL_DestroyTexture(section_images[s]);
+            }
+        }
         free(section_images); free(section_image_w); free(section_image_h);
         return CAT_ERROR;
     }

@@ -720,6 +720,9 @@ typedef struct {
     SDL_Joystick       *joystick;
     SDL_GameController *controller;
     SDL_Texture        *bg_texture;
+    SDL_Texture        *rounded_scratch;     /* render target for cat_draw_image_rounded_ex */
+    int                 rounded_scratch_w;
+    int                 rounded_scratch_h;
     int                 screen_w;
     int                 screen_h;
     bool                renderer_has_vsync;
@@ -4396,16 +4399,23 @@ void cat_draw_image_rounded_ex(SDL_Texture *tex, int x, int y, int w, int h,
     }
     if (!custom_blend_ok) { cat_draw_image(tex, x, y, w, h); return; }
 
-    /* Scratch render target, grown to the largest box we've been asked to draw. */
-    static SDL_Texture *scratch = NULL;
-    static int scratch_w = 0, scratch_h = 0;
-    if (!scratch || scratch_w < w || scratch_h < h) {
+    /* Scratch render target, grown to the largest box we've been asked to draw.
+       Held in cat__g so cat_quit() can free it (a function-local static would be
+       a permanent unfreed GPU allocation). */
+    SDL_Texture *scratch = cat__g.rounded_scratch;
+    if (!scratch || cat__g.rounded_scratch_w < w || cat__g.rounded_scratch_h < h) {
         if (scratch) SDL_DestroyTexture(scratch);
-        if (w > scratch_w) scratch_w = w;
-        if (h > scratch_h) scratch_h = h;
+        if (w > cat__g.rounded_scratch_w) cat__g.rounded_scratch_w = w;
+        if (h > cat__g.rounded_scratch_h) cat__g.rounded_scratch_h = h;
         scratch = SDL_CreateTexture(rend, SDL_PIXELFORMAT_RGBA8888,
-                                    SDL_TEXTUREACCESS_TARGET, scratch_w, scratch_h);
-        if (!scratch) { scratch_w = scratch_h = 0; cat_draw_image(tex, x, y, w, h); return; }
+                                    SDL_TEXTUREACCESS_TARGET,
+                                    cat__g.rounded_scratch_w, cat__g.rounded_scratch_h);
+        cat__g.rounded_scratch = scratch;
+        if (!scratch) {
+            cat__g.rounded_scratch_w = cat__g.rounded_scratch_h = 0;
+            cat_draw_image(tex, x, y, w, h);
+            return;
+        }
         SDL_SetTextureBlendMode(scratch, SDL_BLENDMODE_BLEND);
     }
 
@@ -4743,6 +4753,7 @@ void cat_cache_put(const char *key, SDL_Texture *tex, int w, int h) {
     /* Add new entry */
     cat_cache_entry *e = &cat__g.tex_cache.entries[cat__g.tex_cache.count++];
     strncpy(e->key, key, sizeof(e->key) - 1);
+    e->key[sizeof(e->key) - 1] = '\0';
     e->texture = tex;
     e->w = w;
     e->h = h;
@@ -7116,6 +7127,14 @@ void cat_quit(void) {
     if (cat__g.bg_texture) {
         SDL_DestroyTexture(cat__g.bg_texture);
         cat__g.bg_texture = NULL;
+    }
+
+    /* Destroy the rounded-image scratch render target */
+    if (cat__g.rounded_scratch) {
+        SDL_DestroyTexture(cat__g.rounded_scratch);
+        cat__g.rounded_scratch = NULL;
+        cat__g.rounded_scratch_w = 0;
+        cat__g.rounded_scratch_h = 0;
     }
 
     /* Destroy status assets */
