@@ -64,7 +64,7 @@ ASSETS_FORCE ?= 0
 CJSON_SRC    := $(CJSON_DIR)/cJSON.c
 
 # Example names
-EXAMPLES := hello demo download combo perf
+EXAMPLES := hello demo download combo perf leaf-app
 WARN_CFLAGS := -Wall -Wextra -Wno-unused-parameter
 
 # ─── Phony targets ───────────────────────────────────────────────────────

@@ -1,0 +1,12 @@
+{
+  "name": "Leaf App",
+  "version": "v1.0.0",
+  "icon": "icon.png",
+  "platform": "mlp1",
+  "pak_version": "1.0.0",
+  "min_jawaka_version": "0.0.1",
+  "type": "TOOL",
+  "description": "A worked example of a Leaf-consistent app: a list with a preview that drills into a scrollable detail page, built on the Catastrophe box model.",
+  "author": "your-name",
+  "repo_url": "https://github.com/your-name/leaf-app"
+}
