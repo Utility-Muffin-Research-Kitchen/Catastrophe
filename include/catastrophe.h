@@ -794,6 +794,7 @@ typedef struct {
     bool          buttons_held[CAT_BTN_COUNT];
     uint32_t      button_press_time[CAT_BTN_COUNT];
     uint32_t      button_repeat_time[CAT_BTN_COUNT];
+    bool          shoulder_repeat;   /* opt-in: hold-repeat L1/R1 (default off) */
 
     /* Tab bar: right-side space to leave for an overlaid inline status bar. */
     int           tab_bar_reserved_right;
@@ -935,6 +936,7 @@ int            cat_set_font_bump(int bump);
 bool           cat_poll_input(cat_input_event *event);
 void           cat_set_input_delay(uint32_t ms);
 void           cat_set_input_repeat(uint32_t delay_ms, uint32_t rate_ms);
+void           cat_set_shoulder_repeat(bool enabled);  /* opt-in L1/R1 hold-repeat */
 void           cat_flip_face_buttons(bool flip);
 const char    *cat_button_name(cat_button btn);
 
@@ -3441,6 +3443,28 @@ static void cat__process_sdl_events(void) {
         }
         cat__advance_repeat_deadline(&cat__g.axis_repeat_time_x, now);
     }
+
+    /* Shoulder hold repeat — opt-in (cat_set_shoulder_repeat). Off by default so
+       L1/R1 stay single-shot everywhere else; the coverflow carousel turns it on
+       so a held shoulder keeps flowing. Self-arms on the first held frame. */
+    if (cat__g.shoulder_repeat) {
+        const cat_button sh[2] = { CAT_BTN_L1, CAT_BTN_R1 };
+        for (int k = 0; k < 2; k++) {
+            cat_button b = sh[k];
+            if (!cat__g.buttons_held[b]) { cat__g.button_repeat_time[b] = 0; continue; }
+            if (cat__g.button_repeat_time[b] == 0) {
+                cat__g.button_repeat_time[b] = now + cat__g.input_repeat_delay_ms;
+            } else if (now >= cat__g.button_repeat_time[b]) {
+                int next = (cat__input_head + 1) % 64;
+                if (next != cat__input_tail) {
+                    cat__input_queue[cat__input_head] = (cat_input_event){ b, true, true };
+                    cat__input_head = next;
+                    cat__g.needs_frame = true;
+                }
+                cat__advance_repeat_deadline(&cat__g.button_repeat_time[b], now);
+            }
+        }
+    }
 }
 
 bool cat_poll_input(cat_input_event *event) {
@@ -3474,6 +3498,10 @@ void cat_set_input_delay(uint32_t ms) {
 void cat_set_input_repeat(uint32_t delay_ms, uint32_t rate_ms) {
     cat__g.input_repeat_delay_ms = delay_ms;
     cat__g.input_repeat_rate_ms = rate_ms;
+}
+
+void cat_set_shoulder_repeat(bool enabled) {
+    cat__g.shoulder_repeat = enabled;
 }
 
 void cat_flip_face_buttons(bool flip) {
