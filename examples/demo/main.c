@@ -52,6 +52,7 @@ static void demo_list(void) {
         { .label = "Bravo",     .metadata = "/path/bravo" },
         { .label = "Charlie",   .metadata = "/path/charlie" },
         { .label = "Delta",     .metadata = "/path/delta" },
+        { .label = "Disabled",  .metadata = "/path/disabled", .trailing_text = "Unavailable", .disabled = true },
         { .label = "Echo",      .metadata = "/path/echo" },
         { .label = "Foxtrot",   .metadata = "/path/foxtrot" },
         { .label = "Golf",      .metadata = "/path/golf" },

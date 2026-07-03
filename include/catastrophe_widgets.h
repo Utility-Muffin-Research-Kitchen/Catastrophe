@@ -54,6 +54,7 @@ typedef struct {
     bool         selected;    /* For multi-select: is this item checked? */
     SDL_Texture *background_image; /* Optional fullscreen preview for the focused item */
     const char  *trailing_text; /* Optional right-aligned visible hint text */
+    bool         disabled;    /* Dim row and let caller reject selection with context */
 } cat_list_item;
 
 /* Convenience initializers for cat_list_item.
@@ -988,6 +989,7 @@ int cat_list(cat_list_opts *opts, cat_list_result *result) {
             int item_y = content_y + i * (pill_h + item_gap);
             bool is_selected = (idx == cursor);
 
+            bool is_disabled = opts->items[idx].disabled;
             const char *label = opts->items[idx].label ? opts->items[idx].label : "";
             int text_h = TTF_FontHeight(item_font);
 
@@ -1055,7 +1057,8 @@ int cat_list(cat_list_opts *opts, cat_list_result *result) {
             /* Text color: follow the pill — highlight the departure item during transit,
              * switch to arrival item only once the pill settles */
             cat_draw_color text_color = (idx == highlight_idx)
-                                ? theme->highlighted_text : theme->text;
+                                ? theme->highlighted_text
+                                : (is_disabled ? theme->disabled : theme->text);
 
             /* Text — always at fixed item_y; selected item may scroll */
             if (is_selected) {
@@ -1101,7 +1104,7 @@ int cat_list(cat_list_opts *opts, cat_list_result *result) {
             if (trailing_w > 0) {
                 int trailing_x = margin + available_w - pill_pad - trailing_w;
                 int trailing_y = item_y + (pill_h - text_h) / 2;
-                cat_draw_color trailing_color = theme->hint;
+                cat_draw_color trailing_color = is_disabled ? theme->disabled : theme->hint;
                 if (idx == highlight_idx) trailing_color.a = 255;
                 cat_draw_text(item_font, opts->items[idx].trailing_text,
                              trailing_x, trailing_y, trailing_color);

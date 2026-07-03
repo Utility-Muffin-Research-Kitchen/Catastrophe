@@ -378,6 +378,7 @@ typedef struct cat_theme {
     cat_draw_color button_glyph_bg;   /* Inner A/B/X/Y pill background (defaults to highlight) */
     cat_draw_color text;              /* Default text color */
     cat_draw_color highlighted_text;  /* Text on highlighted/selected items */
+    cat_draw_color disabled;          /* Disabled or unavailable list/menu items */
     cat_draw_color hint;              /* Help text, dim text */
     cat_draw_color emphasis;          /* Section headings / status — the highlight hue,
                                          luminance-clamped to read on the background
@@ -2162,6 +2163,7 @@ static void cat__stylesheet_to_theme(const cat_stylesheet *s, cat_theme *t) {
                                        : s->ui.highlight_color);
     t->text             = cat_color_to_sdl(s->ui.text_color);
     t->highlighted_text = cat_color_to_sdl(s->ui.highlight_text_color);
+    t->disabled         = cat_color_to_sdl(s->ui.disabled_color);
     /* Hint text: prefer explicit hint_color, fall back to disabled_color (Allium parity). */
     t->hint             = cat_color_to_sdl(
         s->ui.hint_color ? s->ui.hint_color : s->ui.disabled_color);
