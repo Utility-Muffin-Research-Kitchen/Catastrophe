@@ -153,7 +153,7 @@
 #define CAT_TEXT_SCROLL_PAUSE_MS 1000
 
 /* Texture cache capacity */
-#define CAT_TEXTURE_CACHE_SIZE 8
+#define CAT_TEXTURE_CACHE_SIZE 32
 #define CAT_TEXT_CACHE_SIZE 64
 #define CAT_TEXT_CACHE_MAX_TEXT 192
 
