@@ -154,6 +154,8 @@
 
 /* Texture cache capacity */
 #define CAT_TEXTURE_CACHE_SIZE 8
+#define CAT_TEXT_CACHE_SIZE 64
+#define CAT_TEXT_CACHE_MAX_TEXT 192
 
 /* Max combo registrations */
 #define CAT_MAX_COMBOS 16
@@ -658,6 +660,23 @@ typedef struct {
     int            count;
 } cat_texture_cache;
 
+/* Rendered text texture cache entry */
+typedef struct {
+    TTF_Font     *font;
+    uint32_t      color_rgba;
+    uint32_t      hash;
+    char          text[CAT_TEXT_CACHE_MAX_TEXT];
+    SDL_Texture  *texture;
+    int           w, h;
+    uint32_t      last_used;
+} cat_text_cache_entry;
+
+/* Rendered text texture cache (LRU) */
+typedef struct {
+    cat_text_cache_entry entries[CAT_TEXT_CACHE_SIZE];
+    int                  count;
+} cat_text_cache;
+
 /* Sequence buffer entry (internal) */
 typedef struct {
     cat_button  button;
@@ -815,6 +834,7 @@ typedef struct {
 
     /* Texture cache */
     cat_texture_cache tex_cache;
+    cat_text_cache    text_cache;
 
     /* Logging */
     FILE         *log_file;
@@ -1742,6 +1762,7 @@ static void cat__apply_env_appearance_overrides(void) {
 /* Forward declarations from later in the implementation */
 static int cat__load_fonts(const char *user_font_path);
 static void cat__input_backend_init(void);
+static void cat__text_cache_clear(void);
 
 static void cat__stylesheet_font_init_default(cat_stylesheet_font *f) {
     f->path[0] = '\0';
@@ -2646,6 +2667,7 @@ static int cat__load_fonts(const char *user_font_path) {
     }
 
     /* All opened successfully — swap in and close old */
+    cat__text_cache_clear();
     for (int i = 0; i < CAT_FONT_TIER_COUNT; i++) {
         if (cat__g.fonts[i]) TTF_CloseFont(cat__g.fonts[i]);
         cat__g.fonts[i] = new_fonts[i];
@@ -2688,7 +2710,11 @@ static bool cat__resolve_symbol_font_path(char *out, size_t out_size) {
 TTF_Font *cat_get_symbol_font(void) {
     int bump = cat__g.font_bump;
     if (!cat__g.symbol_font || cat__g.symbol_font_bump != bump) {
-        if (cat__g.symbol_font) { TTF_CloseFont(cat__g.symbol_font); cat__g.symbol_font = NULL; }
+        if (cat__g.symbol_font) {
+            cat__text_cache_clear();
+            TTF_CloseFont(cat__g.symbol_font);
+            cat__g.symbol_font = NULL;
+        }
         char path[PATH_MAX];
         if (cat__resolve_symbol_font_path(path, sizeof(path))) {
             int size = cat_font_size_for_resolution(cat__font_base_sizes[CAT_FONT_LARGE] + bump);
@@ -2706,7 +2732,11 @@ TTF_Font *cat_get_symbol_font(void) {
 static TTF_Font *cat__get_symbol_font_small(void) {
     int bump = cat__g.font_bump;
     if (!cat__g.symbol_font_small || cat__g.symbol_font_small_bump != bump) {
-        if (cat__g.symbol_font_small) { TTF_CloseFont(cat__g.symbol_font_small); cat__g.symbol_font_small = NULL; }
+        if (cat__g.symbol_font_small) {
+            cat__text_cache_clear();
+            TTF_CloseFont(cat__g.symbol_font_small);
+            cat__g.symbol_font_small = NULL;
+        }
         char path[PATH_MAX];
         if (cat__resolve_symbol_font_path(path, sizeof(path))) {
             int size = cat_font_size_for_resolution(cat__font_base_sizes[CAT_FONT_SMALL] + bump);
@@ -3666,7 +3696,7 @@ void cat_present(void) {
         cat__g.needs_frame = false;
         uint32_t now = SDL_GetTicks();
         uint32_t elapsed = now - cat__g.last_present_ms;
-        if (elapsed < 16) {
+        if (!cat__g.renderer_has_vsync && elapsed < 16) {
             SDL_Delay(16 - elapsed);
         }
     } else {
@@ -3951,57 +3981,201 @@ void cat_draw_star(int cx, int cy, int outer_r, cat_draw_color c) {
                        indices, 3 * CAT__STAR_PERIM);
 }
 
+static uint32_t cat__text_color_key(cat_draw_color c) {
+    return cat_color_rgba(c.r, c.g, c.b, c.a);
+}
+
+static uint32_t cat__text_hash(const char *s) {
+    uint32_t h = 2166136261u;
+    while (*s) {
+        h ^= (uint8_t)*s++;
+        h *= 16777619u;
+    }
+    return h;
+}
+
+static bool cat__text_cacheable(const char *text) {
+    for (int i = 0; i < CAT_TEXT_CACHE_MAX_TEXT; i++) {
+        if (text[i] == '\0') return true;
+    }
+    return false;
+}
+
+static SDL_Texture *cat__render_text_texture(TTF_Font *font, const char *text,
+                                             cat_draw_color color, int *out_w,
+                                             int *out_h) {
+    SDL_Surface *surf = TTF_RenderUTF8_Blended(font, text, color);
+    if (!surf) return NULL;
+
+    SDL_Texture *tex = SDL_CreateTextureFromSurface(cat__g.renderer, surf);
+    int w = surf->w;
+    int h = surf->h;
+    SDL_FreeSurface(surf);
+    if (!tex) return NULL;
+
+    SDL_SetTextureBlendMode(tex, SDL_BLENDMODE_BLEND);
+    if (out_w) *out_w = w;
+    if (out_h) *out_h = h;
+    return tex;
+}
+
+static int cat__draw_text_uncached(TTF_Font *font, const char *text, int x, int y,
+                                  cat_draw_color color) {
+    int w = 0, h = 0;
+    SDL_Texture *tex = cat__render_text_texture(font, text, color, &w, &h);
+    if (!tex) return 0;
+
+    SDL_Rect dst = {x, y, w, h};
+    SDL_RenderCopy(cat__g.renderer, tex, NULL, &dst);
+    SDL_DestroyTexture(tex);
+    return w;
+}
+
+static cat_text_cache_entry *cat__text_cache_find(TTF_Font *font, const char *text,
+                                                  uint32_t color_rgba,
+                                                  uint32_t hash) {
+    for (int i = 0; i < cat__g.text_cache.count; i++) {
+        cat_text_cache_entry *e = &cat__g.text_cache.entries[i];
+        if (e->font == font &&
+            e->color_rgba == color_rgba &&
+            e->hash == hash &&
+            strcmp(e->text, text) == 0) {
+            e->last_used = SDL_GetTicks();
+            return e;
+        }
+    }
+    return NULL;
+}
+
+static cat_text_cache_entry *cat__text_cache_find_any_color(TTF_Font *font,
+                                                            const char *text,
+                                                            uint32_t hash) {
+    for (int i = 0; i < cat__g.text_cache.count; i++) {
+        cat_text_cache_entry *e = &cat__g.text_cache.entries[i];
+        if (e->font == font && e->hash == hash && strcmp(e->text, text) == 0) {
+            e->last_used = SDL_GetTicks();
+            return e;
+        }
+    }
+    return NULL;
+}
+
+static void cat__text_cache_evict(int idx) {
+    if (idx < 0 || idx >= cat__g.text_cache.count) return;
+    if (cat__g.text_cache.entries[idx].texture) {
+        SDL_DestroyTexture(cat__g.text_cache.entries[idx].texture);
+    }
+    cat__g.text_cache.entries[idx] = (cat_text_cache_entry){0};
+    if (idx < cat__g.text_cache.count - 1) {
+        cat__g.text_cache.entries[idx] =
+            cat__g.text_cache.entries[cat__g.text_cache.count - 1];
+    }
+    cat__g.text_cache.count--;
+}
+
+static cat_text_cache_entry *cat__text_cache_insert(TTF_Font *font, const char *text,
+                                                    cat_draw_color color,
+                                                    uint32_t color_rgba,
+                                                    uint32_t hash) {
+    int w = 0, h = 0;
+    SDL_Texture *tex = cat__render_text_texture(font, text, color, &w, &h);
+    if (!tex) return NULL;
+
+    if (cat__g.text_cache.count >= CAT_TEXT_CACHE_SIZE) {
+        int lru = 0;
+        for (int i = 1; i < cat__g.text_cache.count; i++) {
+            if (cat__g.text_cache.entries[i].last_used <
+                cat__g.text_cache.entries[lru].last_used) {
+                lru = i;
+            }
+        }
+        cat__text_cache_evict(lru);
+    }
+
+    cat_text_cache_entry *e = &cat__g.text_cache.entries[cat__g.text_cache.count++];
+    e->font = font;
+    e->color_rgba = color_rgba;
+    e->hash = hash;
+    strncpy(e->text, text, sizeof(e->text) - 1);
+    e->text[sizeof(e->text) - 1] = '\0';
+    e->texture = tex;
+    e->w = w;
+    e->h = h;
+    e->last_used = SDL_GetTicks();
+    return e;
+}
+
+static cat_text_cache_entry *cat__text_cache_get(TTF_Font *font, const char *text,
+                                                 cat_draw_color color) {
+    if (!font || !text || !text[0] || !cat__g.renderer || !cat__text_cacheable(text))
+        return NULL;
+
+    uint32_t hash = cat__text_hash(text);
+    uint32_t color_rgba = cat__text_color_key(color);
+    cat_text_cache_entry *e = cat__text_cache_find(font, text, color_rgba, hash);
+    if (e) return e;
+    return cat__text_cache_insert(font, text, color, color_rgba, hash);
+}
+
+static void cat__text_cache_clear(void) {
+    for (int i = 0; i < cat__g.text_cache.count; i++) {
+        if (cat__g.text_cache.entries[i].texture) {
+            SDL_DestroyTexture(cat__g.text_cache.entries[i].texture);
+        }
+    }
+    memset(&cat__g.text_cache, 0, sizeof(cat__g.text_cache));
+}
+
 int cat_draw_text(TTF_Font *font, const char *text, int x, int y, cat_draw_color color) {
     if (!font || !text || !text[0]) return 0;
 
-    SDL_Surface *surf = TTF_RenderUTF8_Blended(font, text, color);
-    if (!surf) return 0;
+    cat_text_cache_entry *e = cat__text_cache_get(font, text, color);
+    if (e && e->texture) {
+        SDL_Rect dst = {x, y, e->w, e->h};
+        SDL_RenderCopy(cat__g.renderer, e->texture, NULL, &dst);
+        return e->w;
+    }
 
-    SDL_Texture *tex = SDL_CreateTextureFromSurface(cat__g.renderer, surf);
-    if (!tex) { SDL_FreeSurface(surf); return 0; }
-
-    SDL_Rect dst = {x, y, surf->w, surf->h};
-    SDL_RenderCopy(cat__g.renderer, tex, NULL, &dst);
-
-    int w = surf->w;
-    SDL_DestroyTexture(tex);
-    SDL_FreeSurface(surf);
-    return w;
+    return cat__draw_text_uncached(font, text, x, y, color);
 }
 
 int cat_draw_text_clipped(TTF_Font *font, const char *text, int x, int y, cat_draw_color color, int max_w) {
     if (!font || !text || !text[0]) return 0;
     if (max_w <= 0) return cat_draw_text(font, text, x, y, color);
 
-    SDL_Surface *surf = TTF_RenderUTF8_Blended(font, text, color);
-    if (!surf) return 0;
+    cat_text_cache_entry *e = cat__text_cache_get(font, text, color);
+    if (e && e->texture) {
+        int draw_w = e->w;
+        if (draw_w > max_w) draw_w = max_w;
 
-    SDL_Texture *tex = SDL_CreateTextureFromSurface(cat__g.renderer, surf);
-    if (!tex) { SDL_FreeSurface(surf); return 0; }
+        SDL_Rect src = {0, 0, draw_w, e->h};
+        SDL_Rect dst = {x, y, draw_w, e->h};
+        SDL_RenderCopy(cat__g.renderer, e->texture, &src, &dst);
+        return e->w;
+    }
 
-    int draw_w = surf->w;
+    int tw = 0, th = 0;
+    SDL_Texture *tex = cat__render_text_texture(font, text, color, &tw, &th);
+    if (!tex) return 0;
+    int draw_w = tw;
     if (draw_w > max_w) draw_w = max_w;
 
-    SDL_Rect src = {0, 0, draw_w, surf->h};
-    SDL_Rect dst = {x, y, draw_w, surf->h};
+    SDL_Rect src = {0, 0, draw_w, th};
+    SDL_Rect dst = {x, y, draw_w, th};
     SDL_RenderCopy(cat__g.renderer, tex, &src, &dst);
 
-    int orig_w = surf->w;
     SDL_DestroyTexture(tex);
-    SDL_FreeSurface(surf);
-    return orig_w;
+    return tw;
 }
 
 int cat_draw_text_ellipsized(TTF_Font *font, const char *text, int x, int y, cat_draw_color color, int max_w) {
     if (!font || !text || !text[0]) return 0;
     if (max_w <= 0) return cat_draw_text(font, text, x, y, color);
 
-    int full_w = 0;
-    TTF_SizeUTF8(font, text, &full_w, NULL);
+    int full_w = cat_measure_text(font, text);
     if (full_w <= max_w) return cat_draw_text(font, text, x, y, color);
 
-    int ellipsis_w = 0;
-    TTF_SizeUTF8(font, "...", &ellipsis_w, NULL);
+    int ellipsis_w = cat_measure_text(font, "...");
     if (ellipsis_w >= max_w) return cat_draw_text_clipped(font, text, x, y, color, max_w);
 
     int target_w = max_w - ellipsis_w;
@@ -4052,12 +4226,10 @@ int cat_measure_text_ellipsized(TTF_Font *font, const char *text, int max_w) {
     if (!font || !text || !text[0]) return 0;
     if (max_w <= 0) return 0;
 
-    int full_w = 0;
-    TTF_SizeUTF8(font, text, &full_w, NULL);
+    int full_w = cat_measure_text(font, text);
     if (full_w <= max_w) return full_w;
 
-    int ellipsis_w = 0;
-    TTF_SizeUTF8(font, "...", &ellipsis_w, NULL);
+    int ellipsis_w = cat_measure_text(font, "...");
     if (ellipsis_w >= max_w) return max_w;
 
     int target_w = max_w - ellipsis_w;
@@ -4251,6 +4423,11 @@ static int cat__wrapped_line_count(TTF_Font *font, const char *text, int max_w) 
 
 int cat_measure_text(TTF_Font *font, const char *text) {
     if (!font || !text || !text[0]) return 0;
+    if (cat__text_cacheable(text)) {
+        cat_text_cache_entry *e =
+            cat__text_cache_find_any_color(font, text, cat__text_hash(text));
+        if (e) return e->w;
+    }
     int w = 0;
     TTF_SizeUTF8(font, text, &w, NULL);
     return w;
@@ -7152,6 +7329,7 @@ void cat_quit(void) {
 
     /* Clear texture cache */
     cat_cache_clear();
+    cat__text_cache_clear();
 
     /* Destroy background texture */
     if (cat__g.bg_texture) {
