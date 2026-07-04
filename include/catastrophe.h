@@ -3534,6 +3534,14 @@ void cat_set_input_repeat(uint32_t delay_ms, uint32_t rate_ms) {
 
 void cat_set_shoulder_repeat(bool enabled) {
     cat__g.shoulder_repeat = enabled;
+    if (!enabled) {
+        /* Clear any armed L1/R1 repeat deadlines. The self-arming block above
+           only runs while shoulder_repeat is on, so a deadline left set on a
+           still-held shoulder would keep cat__next_wake_time() waking at (or
+           past) it — a 0-timeout idle spin until release. */
+        cat__g.button_repeat_time[CAT_BTN_L1] = 0;
+        cat__g.button_repeat_time[CAT_BTN_R1] = 0;
+    }
 }
 
 void cat_flip_face_buttons(bool flip) {
