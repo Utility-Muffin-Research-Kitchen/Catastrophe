@@ -187,6 +187,12 @@ typedef struct {
 int cat_keyboard(const char *initial_text, const char *help_text,
                 cat_keyboard_layout layout, cat_keyboard_result *result);
 
+/* Like cat_keyboard() but paints an optional full-screen `backdrop` texture
+   behind the keys (NULL = themed background, i.e. identical to cat_keyboard). */
+int cat_keyboard_ex(const char *initial_text, const char *help_text,
+                cat_keyboard_layout layout, SDL_Texture *backdrop,
+                cat_keyboard_result *result);
+
 /* URL keyboard with customizable shortcut keys */
 typedef struct {
     const char **shortcut_keys;   /* e.g. {".com", "https://", ".org"} */
@@ -1826,8 +1832,18 @@ static const char *cat__kb_help_url =
     "Start: Confirm input\n"
     "123/abc: Toggle number/symbol grid";
 
-int cat_keyboard(const char *initial_text, const char *help_text,
-                cat_keyboard_layout layout, cat_keyboard_result *result) {
+/* Extended keyboard: identical to cat_keyboard() but accepts an optional
+   full-screen backdrop texture. When `backdrop` is non-NULL it is blitted to
+   fill the screen each frame in place of the themed background — letting a
+   caller (e.g. a Cover Flow launcher) show its own snapshot behind the keys.
+   A supplied backdrop also suppresses the control-hint footer and maps X to
+   cancel/back-out (the caller owns the chrome, and its users are expected to
+   know the controls — matching the host's overlay). cat_keyboard()
+   below is a thin wrapper that passes backdrop = NULL, so every existing caller
+   is byte-for-byte unchanged. */
+int cat_keyboard_ex(const char *initial_text, const char *help_text,
+                cat_keyboard_layout layout, SDL_Texture *backdrop,
+                cat_keyboard_result *result) {
     if (!result) return CAT_ERROR;
 
     memset(result, 0, sizeof(*result));
@@ -1888,6 +1904,7 @@ int cat_keyboard(const char *initial_text, const char *help_text,
                         break;
                     }
                     case CAT_BTN_B: cat__kb_backspace(result, &text_cursor); break;
+                    case CAT_BTN_X: if (backdrop) return CAT_CANCELLED; break;
                     case CAT_BTN_Y: return CAT_CANCELLED;
                     case CAT_BTN_START: return CAT_OK;
                     case CAT_BTN_L1: cat__kb_move_cursor_left(result->text, &text_cursor); break;
@@ -1899,7 +1916,8 @@ int cat_keyboard(const char *initial_text, const char *help_text,
                 }
             }
 
-            cat_draw_background();
+            if (backdrop) SDL_RenderCopy(cat_get_renderer(), backdrop, NULL, NULL);
+            else          cat_draw_background();
             cat_draw_pill(input_x, input_y, input_w, input_h, theme->highlight);
             cat__kb_draw_input_text(text_font, result, text_cursor, &text_scroll,
                                    input_x, input_y, input_w, input_h,
@@ -1918,9 +1936,9 @@ int cat_keyboard(const char *initial_text, const char *help_text,
                                  sel ? theme->highlighted_text : theme->hint);
                 }
             }
-            cat__kb_draw_footer();
+            if (!backdrop) cat__kb_draw_footer();
             cat_present();
-    
+
         }
         return CAT_CANCELLED;
     }
@@ -2051,7 +2069,9 @@ int cat_keyboard(const char *initial_text, const char *help_text,
                     break;
 
                 case CAT_BTN_X:
-                    /* Space (Gabagool mapping for general keyboard) */
+                    /* Immersive (backdrop) mode: X backs out, matching the
+                       host's overlay. Otherwise it's Space (Gabagool mapping). */
+                    if (backdrop) return CAT_CANCELLED;
                     cat__kb_insert(result, &text_cursor, " ");
                     break;
 
@@ -2096,7 +2116,8 @@ int cat_keyboard(const char *initial_text, const char *help_text,
         }
 
         /* ── Render ── */
-        cat_draw_background();
+        if (backdrop) SDL_RenderCopy(cat_get_renderer(), backdrop, NULL, NULL);
+        else          cat_draw_background();
 
         /* Text input field */
         cat_draw_rounded_rect(input_x, input_y, input_w, input_h, CAT_S(8), theme->highlight);
@@ -2216,13 +2237,19 @@ int cat_keyboard(const char *initial_text, const char *help_text,
 
         #undef CAT__KB_DRAW_KEY
 
-        cat__kb_draw_footer();
+        if (!backdrop) cat__kb_draw_footer();
 
         cat_present();
 
     }
 
     return CAT_CANCELLED;
+}
+
+/* Backdrop-free keyboard — the original entry point. Unchanged behavior. */
+int cat_keyboard(const char *initial_text, const char *help_text,
+                cat_keyboard_layout layout, cat_keyboard_result *result) {
+    return cat_keyboard_ex(initial_text, help_text, layout, NULL, result);
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
