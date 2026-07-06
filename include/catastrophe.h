@@ -1008,6 +1008,7 @@ void           cat_draw_rounded_rect(int x, int y, int w, int h, int r, cat_draw
 void           cat_draw_rounded_rect_ex(int x, int y, int w, int h, int r, unsigned corners, cat_draw_color c); /* round only the corners in the CAT_CORNER_* mask; others are square */
 void           cat_draw_pill(int x, int y, int w, int h, cat_draw_color c);
 void           cat_draw_rect(int x, int y, int w, int h, cat_draw_color c);
+void           cat_draw_textured_quad(SDL_Texture *tex, const SDL_FPoint corners[4], const SDL_FPoint uv[4], const SDL_Color col[4]); /* one quad (two triangles) via SDL_RenderGeometry; corners TL,TR,BR,BL. tex NULL = flat fill, uv NULL = full 0..1, col NULL = opaque white. For perspective/tilted cards subdivide into vertical strips to avoid affine-mapping shear. */
 void           cat_draw_circle(int cx, int cy, int r, cat_draw_color c);
 void           cat_draw_star(int cx, int cy, int outer_r, cat_draw_color c); /* filled 5-point star centered at (cx,cy) */
 void           cat_draw_triangle(int x, int y, int w, int h, cat_dir dir, cat_draw_color c); /* solid triangle filling the box, pointing `dir` (cycler/affordance arrows) */
@@ -3943,6 +3944,21 @@ void cat_draw_rect(int x, int y, int w, int h, cat_draw_color c) {
     SDL_SetRenderDrawColor(cat__g.renderer, c.r, c.g, c.b, c.a);
     SDL_Rect r = {x, y, w, h};
     SDL_RenderFillRect(cat__g.renderer, &r);
+}
+
+void cat_draw_textured_quad(SDL_Texture *tex, const SDL_FPoint corners[4],
+                            const SDL_FPoint uv[4], const SDL_Color col[4]) {
+    static const SDL_FPoint kFullUV[4] = { {0, 0}, {1, 0}, {1, 1}, {0, 1} };
+    static const SDL_Color  kWhite     = { 255, 255, 255, 255 };
+    const SDL_FPoint *u = uv ? uv : kFullUV;
+    SDL_Vertex v[4];
+    for (int i = 0; i < 4; i++) {
+        v[i].position  = corners[i];
+        v[i].tex_coord = u[i];
+        v[i].color     = col ? col[i] : kWhite;
+    }
+    static const int idx[6] = { 0, 1, 2, 0, 2, 3 };
+    SDL_RenderGeometry(cat__g.renderer, tex, v, 4, idx, 6);
 }
 
 void cat_draw_circle(int cx, int cy, int r, cat_draw_color c) {
