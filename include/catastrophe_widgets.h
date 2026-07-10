@@ -3397,6 +3397,30 @@ static float cat__field_y_to_lightness(int y, int field_h) {
 
 /* ─── HSL color picker ─────────────────────────────────────────────────── */
 
+/* Fill the color-picker field texture: X = hue (0..1), Y = lightness (top=white
+   .. bottom=black), at the given saturation. Rebuilt live as the user changes
+   saturation with L1/R1 so muted / desaturated colors are reachable (the field
+   used to be locked at full saturation). */
+static void cat__color_field_fill(SDL_Texture *tex, int w, int h, float sat) {
+    if (!tex || w <= 1 || h <= 0) return;
+    void *pixels;
+    int pitch;
+    if (SDL_LockTexture(tex, NULL, &pixels, &pitch) != 0) return;
+    for (int fy = 0; fy < h; fy++) {
+        uint8_t *row = (uint8_t *)pixels + fy * pitch;
+        float l = cat__field_y_to_lightness(fy, h);
+        for (int fx = 0; fx < w; fx++) {
+            float hue = (float)fx / (float)(w - 1);
+            uint8_t pr, pg, pb;
+            cat__hsl_to_rgb(hue, sat, l, &pr, &pg, &pb);
+            row[fx * 3 + 0] = pr;
+            row[fx * 3 + 1] = pg;
+            row[fx * 3 + 2] = pb;
+        }
+    }
+    SDL_UnlockTexture(tex);
+}
+
 int cat_color_picker_ctx(cat_draw_color initial, cat_draw_color *result,
                          cat_color_picker_context *context) {
     if (!result) return CAT_ERROR;
@@ -3440,28 +3464,14 @@ int cat_color_picker_ctx(cat_draw_color initial, cat_draw_color *result,
     if (cursor_y < 0) cursor_y = 0;
     if (cursor_y >= field_h) cursor_y = field_h - 1;
 
-    /* Build HSL field texture (X=hue, Y=lightness, full saturation) */
+    /* Saturation is user-adjustable (L1/R1); start at the initial color's own
+       saturation so the field opens showing the current color. */
+    float sat = init_s;
+
+    /* Build the HSL field texture (X=hue, Y=lightness) at the current saturation. */
     SDL_Texture *field_tex = SDL_CreateTexture(renderer,
         SDL_PIXELFORMAT_RGB24, SDL_TEXTUREACCESS_STREAMING, field_w, field_h);
-    if (field_tex) {
-        void *pixels;
-        int pitch;
-        if (SDL_LockTexture(field_tex, NULL, &pixels, &pitch) == 0) {
-            for (int fy = 0; fy < field_h; fy++) {
-                uint8_t *row = (uint8_t *)pixels + fy * pitch;
-                float l = cat__field_y_to_lightness(fy, field_h);
-                for (int fx = 0; fx < field_w; fx++) {
-                    float h = (float)fx / (float)(field_w - 1);
-                    uint8_t pr, pg, pb;
-                    cat__hsl_to_rgb(h, 1.0f, l, &pr, &pg, &pb);
-                    row[fx * 3 + 0] = pr;
-                    row[fx * 3 + 1] = pg;
-                    row[fx * 3 + 2] = pb;
-                }
-            }
-            SDL_UnlockTexture(field_tex);
-        }
-    }
+    cat__color_field_fill(field_tex, field_w, field_h, sat);
 
     /* Current picked color (live preview) */
     uint8_t pick_r = initial.r, pick_g = initial.g, pick_b = initial.b;
@@ -3489,8 +3499,10 @@ int cat_color_picker_ctx(cat_draw_color initial, cat_draw_color *result,
             }
         }
 
-        /* Read held state directly from Catastrophe's internal tracking.
-           This gives reliable diagonal movement and L1/R1 fast mode. */
+        /* Read held state directly from Catastrophe's internal tracking for
+           reliable diagonal movement. D-pad = hue (X) / lightness (Y); L1/R1 =
+           fast cursor; L2/R2 = saturation, so muted / desaturated colors are
+           reachable. */
         bool fast_mode = cat__g.buttons_held[CAT_BTN_L1] ||
                          cat__g.buttons_held[CAT_BTN_R1];
         int speed = fast_mode ? cursor_speed * 4 : cursor_speed;
@@ -3500,7 +3512,11 @@ int cat_color_picker_ctx(cat_draw_color initial, cat_draw_color *result,
         if (cat__g.buttons_held[CAT_BTN_UP])    dy -= speed;
         if (cat__g.buttons_held[CAT_BTN_DOWN])  dy += speed;
 
-        if (dx != 0 || dy != 0) {
+        float sat_delta = 0.0f;
+        if (cat__g.buttons_held[CAT_BTN_L2]) sat_delta -= 0.02f;
+        if (cat__g.buttons_held[CAT_BTN_R2]) sat_delta += 0.02f;
+
+        if (dx != 0 || dy != 0 || sat_delta != 0.0f) {
             cursor_x += dx;
             cursor_y += dy;
             if (cursor_x < 0) cursor_x = 0;
@@ -3508,9 +3524,16 @@ int cat_color_picker_ctx(cat_draw_color initial, cat_draw_color *result,
             if (cursor_y < 0) cursor_y = 0;
             if (cursor_y >= field_h) cursor_y = field_h - 1;
 
+            if (sat_delta != 0.0f) {
+                sat += sat_delta;
+                if (sat < 0.0f) sat = 0.0f;
+                if (sat > 1.0f) sat = 1.0f;
+                cat__color_field_fill(field_tex, field_w, field_h, sat);  /* refresh the field */
+            }
+
             float h = (float)cursor_x / (float)(field_w - 1);
             float l = cat__field_y_to_lightness(cursor_y, field_h);
-            cat__hsl_to_rgb(h, 1.0f, l, &pick_r, &pick_g, &pick_b);
+            cat__hsl_to_rgb(h, sat, l, &pick_r, &pick_g, &pick_b);
         }
 
         /* Draw */
@@ -3525,7 +3548,9 @@ int cat_color_picker_ctx(cat_draw_color initial, cat_draw_color *result,
                 title = context->roles[context->active_role].label;
             cat_draw_text(title_font, title, pad * 2, pad, theme->text);
 
-            const char *hints = "L1:Fast  B:Cancel  A:Pick";
+            char hints[80];
+            snprintf(hints, sizeof(hints), "L2: Sat %d%%   L1:Fast   B:Cancel   A:Pick",
+                     (int)(sat * 100.0f + 0.5f));
             int hints_w = cat_measure_text(title_font, hints);
             cat_draw_text(title_font, hints, screen_w - hints_w - pad * 2, pad, theme->hint);
         }
