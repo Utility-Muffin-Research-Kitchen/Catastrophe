@@ -6188,24 +6188,32 @@ static void cat__draw_status_bar_battery_sprite(int x, int y, TTF_Font *font) {
     if (charging) {
         cat__blit_status_icon(47, 51, CAT__BATTERY_W, CAT__BATTERY_H,
                              x, y, iw, ih, cat__g.theme.hint);
-        if (bat >= 100) {
+        int lvl = bat < 0 ? 0 : (bat > 100 ? 100 : bat);
+        if (lvl >= 100) {
             /* Fully charged: solid green, static — the sweep would imply it's
                still filling, so stop animating once it tops off. */
             cat_draw_rect(cav_x, cav_y, cav_w, cav_h, charge_green);
             return;
         }
-        /* Animated rising green fill — reads as "charging". Self-drives the next
-           frame so it keeps animating without the app polling. */
-        uint32_t period = 3000u;                   /* ~3s per fill sweep */
-        uint32_t phase = SDL_GetTicks() % period;
-        int level = (int)(phase * 100u / period);  /* 0..99, loops */
-        int fill_w = cav_w * level / 100;
-        if (fill_w > 0) cat_draw_rect(cav_x, cav_y, fill_w, cav_h, charge_green);
+        /* Solid green = the CURRENT charge (a real gauge, not a 0..100 sweep). */
+        int base_w = cav_w * lvl / 100;
+        if (base_w > 0) cat_draw_rect(cav_x, cav_y, base_w, cav_h, charge_green);
+        /* A translucent green wave fills only the REMAINING (uncharged) portion,
+           rising from the current level toward full and looping — reads as
+           "charging from here to 100". Self-drives the next frame so it animates
+           without the app polling. */
+        uint32_t period = 2000u;                        /* ~2s per wave */
+        uint32_t phase  = SDL_GetTicks() % period;
+        int span = 100 - lvl;                           /* uncharged headroom */
+        int wave_pct = lvl + (int)(phase * (uint32_t)span / period);  /* lvl..~100 */
+        int wave_w = cav_w * wave_pct / 100;
+        if (wave_w > base_w) {
+            cat_draw_color charge_soft = { 0x4C, 0xD9, 0x64, 0x70 };
+            cat_draw_rect(cav_x + base_w, cav_y, wave_w - base_w, cav_h, charge_soft);
+        }
         /* Each requested frame forces a full launcher re-render (~5% of one core),
-           so a tight interval here burns CPU continuously while on the charger
-           (the original 60ms/~16fps cost ~45%). The fill bar is only ~24px wide
-           over a 3s sweep, so 500ms (~2fps, ~4px/step) still reads as "filling"
-           while keeping the idle-charging load to ~10%. */
+           so keep the cadence gentle — 500ms (~2fps) still reads as "filling"
+           while keeping idle-charging load to ~10% (a 60ms/~16fps loop cost ~45%). */
         cat_request_frame_in(500);
         return;
     }
