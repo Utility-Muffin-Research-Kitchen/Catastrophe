@@ -1577,7 +1577,8 @@ int cat_color_picker_ctx(cat_draw_color initial, cat_draw_color *result,
                          cat_color_picker_context *context);
 ```
 
-5×5 grid of predefined colors. Navigate with D-Pad, confirm with A.
+A full-screen HSL field (hue × lightness at an adjustable saturation). D-Pad moves
+the cursor, L1/R1 move it fast, L2/R2 lower/raise saturation, A picks, B cancels.
 
 `cat_color_picker_ctx()` adds an optional live preview strip:
 

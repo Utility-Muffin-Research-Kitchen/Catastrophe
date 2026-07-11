@@ -397,21 +397,25 @@ cat_detail_opts opts = {
 
 ## Color Picker (`cat_color_picker`)
 
-5×5 grid of predefined colors.
+A full-screen HSL color field: hue across X, lightness from white (top) to black
+(bottom), at an adjustable saturation. A cursor selects the color beneath it, with
+a live preview.
 
 ```
-┌─────────────────────────────┐
-│                             │
-│    ■ ■ ■ ■ ■                │
-│    ■ ■ [■] ■ ■              │ ← Cursor highlights one
-│    ■ ■ ■ ■ ■                │
-│    ■ ■ ■ ■ ■                │
-│    ■ ■ ■ ■ ■                │
-│                             │
-│─────────────────────────────│
-│  [B] Cancel   [A] Pick      │
-└─────────────────────────────┘
+┌──────────────────────────────────────┐
+│ Pick a Color        L2: Sat 100% … A:Pick │
+│──────────────────────────────────────│
+│                                      │
+│        hue × lightness field    +    │ ← cursor
+│                                      │
+│──────────────────────────────────────│
+│  live role preview (with context)    │
+└──────────────────────────────────────┘
 ```
+
+**Controls**: D-Pad moves the cursor (X = hue, Y = lightness); **L1/R1** move it
+fast; **L2/R2** lower/raise saturation (the field rebuilds live, so muted colors
+are reachable); **A** picks; **B** cancels.
 
 **Usage**:
 ```c

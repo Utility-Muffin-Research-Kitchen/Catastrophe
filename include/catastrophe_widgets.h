@@ -3399,7 +3399,7 @@ static float cat__field_y_to_lightness(int y, int field_h) {
 
 /* Fill the color-picker field texture: X = hue (0..1), Y = lightness (top=white
    .. bottom=black), at the given saturation. Rebuilt live as the user changes
-   saturation with L1/R1 so muted / desaturated colors are reachable (the field
+   saturation with L2/R2 so muted / desaturated colors are reachable (the field
    used to be locked at full saturation). */
 static void cat__color_field_fill(SDL_Texture *tex, int w, int h, float sat) {
     if (!tex || w <= 1 || h <= 0) return;
@@ -3464,7 +3464,7 @@ int cat_color_picker_ctx(cat_draw_color initial, cat_draw_color *result,
     if (cursor_y < 0) cursor_y = 0;
     if (cursor_y >= field_h) cursor_y = field_h - 1;
 
-    /* Saturation is user-adjustable (L1/R1); start at the initial color's own
+    /* Saturation is user-adjustable (L2/R2); start at the initial color's own
        saturation so the field opens showing the current color. */
     float sat = init_s;
 
