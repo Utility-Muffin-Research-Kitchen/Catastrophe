@@ -4750,15 +4750,18 @@ SDL_Surface *cat_decode_thumbnail_surface(const char *path, const char *thumb_pa
     if (!full) return NULL;
 
     SDL_Surface *small = cat__downscale_surface(full, max_dim);
-    if (small) {
-        /* Persist the downscaled copy so later loads hit the fast path. */
-        if (thumb_path && thumb_path[0]) {
-            IMG_SavePNG(small, thumb_path);          /* best-effort; ignore failure */
-        }
-        SDL_FreeSurface(full);
-        return small;
+    SDL_Surface *result = small ? small : full;
+
+    /* Persist every successful cold decode, including sources that are already
+       within max_dim. Callers use the thumbnail's presence to mark pre-warm work
+       complete; omitting it for a small source makes them enqueue and decode the
+       same image again on every frame. */
+    if (thumb_path && thumb_path[0]) {
+        IMG_SavePNG(result, thumb_path);              /* best-effort; ignore failure */
     }
-    return full;                                     /* already small enough */
+
+    if (small) SDL_FreeSurface(full);
+    return result;
 }
 
 SDL_Texture *cat_texture_from_surface(SDL_Surface *surf) {
