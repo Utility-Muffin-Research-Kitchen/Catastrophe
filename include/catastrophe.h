@@ -1166,6 +1166,9 @@ void           cat_set_footer_overflow_opts(const cat_footer_overflow_opts *opts
 void           cat_get_footer_overflow_opts(cat_footer_overflow_opts *out);
 void           cat_show_footer_overflow(void);
 void           cat_draw_status_bar(cat_status_bar_opts *opts);
+/* Draw the status-bar Bluetooth glyph on its own, scaled to (w,h) at (x,y) and
+   colored `tint`. For callers that want the icon outside the status bar. */
+void           cat_draw_bluetooth_icon(int x, int y, int w, int h, cat_draw_color tint);
 int            cat_get_status_bar_height(void);
 int            cat_get_status_bar_width(cat_status_bar_opts *opts);
 /* Populate *out from the CAT_STATUS_* appearance-snapshot env vars (exported by
@@ -6155,6 +6158,10 @@ static void cat__draw_status_bar_bluetooth_sprite(int x, int y, int bt_state) {
         tint.a = (uint8_t)((int)tint.a * 2 / 5);  /* off: dim to ~40% */
     cat__blit_status_icon(53, 104, CAT__BT_SIZE, CAT__BT_SIZE,
                          x, y, iw, ih, tint);
+}
+
+void cat_draw_bluetooth_icon(int x, int y, int w, int h, cat_draw_color tint) {
+    cat__blit_status_icon(53, 104, CAT__BT_SIZE, CAT__BT_SIZE, x, y, w, h, tint);
 }
 
 /* Speaker sprite, chosen by volume level: mute (<=0), low (1-50), high (51-100).
