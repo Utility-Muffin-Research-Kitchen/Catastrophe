@@ -508,6 +508,47 @@ int cat_download_manager(cat_download *downloads, int count,
                         cat_download_opts *opts, cat_download_result *result);
 
 /* ═══════════════════════════════════════════════════════════════════════════
+ * UI Feedback Sink
+ *
+ * Widgets know things the caller has to re-derive: cat_list_state_move holds
+ * the cursor before and after, so it alone can say whether a press moved
+ * anything or ran into a boundary. Callers that reconstruct that by snapshotting
+ * state around the call get it subtly wrong (a wrapping list reads as blocked, a
+ * scroll target reads as moved right before it is clamped back) and every new
+ * screen has to remember to do it at all.
+ *
+ * So the widgets report it instead. Register a sink and cursor movement,
+ * boundaries and committed values arrive as they happen, from every widget, in
+ * every screen, without the screen participating.
+ *
+ * Catastrophe describes what happened to the widget and stops there. What it
+ * feels like -- a rumble tick, a click, nothing at all -- is the host's call,
+ * as is whether the user asked for it. With no sink registered nothing is
+ * emitted and there is no cost, so this is invisible to apps that ignore it.
+ *
+ * The sink is called synchronously, from input handling, on the UI thread.
+ * Keep it cheap and non-blocking.
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+typedef enum {
+    CAT_UI_MOVED,     /* the cursor / scroll position changed */
+    CAT_UI_EDGE,      /* the press hit a boundary; nothing moved */
+    CAT_UI_ENTERED,   /* a value was committed -- a character typed, a mode toggled */
+    CAT_UI_SURFACE,   /* a blocking widget took the screen, or gave it back */
+} cat_ui_feedback;
+
+typedef void (*cat_ui_feedback_fn)(cat_ui_feedback what, void *user);
+
+/* Register (or clear, with NULL) the process-wide feedback sink. Follows the
+   same single-owner, set-once-at-startup idiom as the theme and stylesheet. */
+void cat_ui_feedback_set(cat_ui_feedback_fn fn, void *user);
+
+/* Emit an event by hand. For cursors a widget does not own -- a hand-rolled
+   grid, a tab strip -- so they can report movement the same way the widgets do
+   rather than reaching for the host's own feedback API. */
+void cat_ui_feedback_emit(cat_ui_feedback what);
+
+/* ═══════════════════════════════════════════════════════════════════════════
  * Non-Blocking List Pane
  *
  * A stateless draw helper for list UIs that run a continuous render loop
@@ -592,6 +633,18 @@ void cat_scroll_state_init(cat_scroll_state *s);
  * bound is applied by cat_draw_scroll_view once it knows the viewport and content
  * heights, so this is safe to call freely from input. */
 void cat_scroll_state_move(cat_scroll_state *s, int delta_px);
+
+/* Like cat_scroll_state_move but clamps the far end too, given the largest legal
+   offset (content_height - viewport_height, floored at 0).
+ *
+ * Prefer this wherever the caller knows its content height. Clamping only at
+ * zero means the target runs past the end and is quietly pulled back at the next
+ * draw, so the bottom of a page reports movement that never happened -- which is
+ * both a wrong feedback event and a real off-by-a-frame in the scroll position.
+ * Knowing the maximum is also what lets the widget tell "scrolled" from "already
+ * at the bottom" and emit CAT_UI_EDGE instead of CAT_UI_MOVED. */
+void cat_scroll_state_move_clamped(cat_scroll_state *s, int delta_px,
+                                   int max_offset);
 
 /* Draw scrollable content inside (x,y,w,h). content_height is the full natural
  * height of the content. Clamps state->offset to [0, content_height - h] (and
@@ -1695,6 +1748,10 @@ static int cat__kb_utf8_next_boundary(const char *text, int idx) {
 }
 
 /* Helper: insert a string at text_cursor in result->text */
+static int cat__keyboard_ex_impl(const char *initial_text, const char *help_text,
+                cat_keyboard_layout layout, SDL_Texture *backdrop,
+                cat_keyboard_result *result);
+
 static void cat__kb_insert(cat_keyboard_result *result, int *text_cursor, const char *str) {
     int cursor;
     int len;
@@ -1710,6 +1767,9 @@ static void cat__kb_insert(cat_keyboard_result *result, int *text_cursor, const 
                 len - cursor + 1);
         memcpy(result->text + cursor, str, slen);
         *text_cursor = cursor + slen;
+        cat_ui_feedback_emit(CAT_UI_ENTERED);
+    } else {
+        cat_ui_feedback_emit(CAT_UI_EDGE);   /* the field is full */
     }
 }
 
@@ -1723,6 +1783,7 @@ static void cat__kb_backspace(cat_keyboard_result *result, int *text_cursor) {
     cursor = cat__kb_utf8_clamp_boundary(result->text, *text_cursor);
     if (cursor <= 0) {
         *text_cursor = 0;
+        cat_ui_feedback_emit(CAT_UI_EDGE);   /* nothing left to delete */
         return;
     }
 
@@ -1732,16 +1793,23 @@ static void cat__kb_backspace(cat_keyboard_result *result, int *text_cursor) {
             result->text + cursor,
             len - cursor + 1);
     *text_cursor = prev;
+    cat_ui_feedback_emit(CAT_UI_ENTERED);
 }
 
+/* The caret clamps at both ends of the text rather than wrapping, so pushing
+   past either end is a boundary. */
 static void cat__kb_move_cursor_left(const char *text, int *text_cursor) {
     if (!text_cursor) return;
+    int before = *text_cursor;
     *text_cursor = cat__kb_utf8_prev_boundary(text, *text_cursor);
+    cat_ui_feedback_emit(*text_cursor != before ? CAT_UI_MOVED : CAT_UI_EDGE);
 }
 
 static void cat__kb_move_cursor_right(const char *text, int *text_cursor) {
     if (!text_cursor) return;
+    int before = *text_cursor;
     *text_cursor = cat__kb_utf8_next_boundary(text, *text_cursor);
+    cat_ui_feedback_emit(*text_cursor != before ? CAT_UI_MOVED : CAT_UI_EDGE);
 }
 
 static void cat__kb_draw_footer(void) {
@@ -1841,7 +1909,19 @@ static const char *cat__kb_help_url =
    know the controls — matching the host's overlay). cat_keyboard()
    below is a thin wrapper that passes backdrop = NULL, so every existing caller
    is byte-for-byte unchanged. */
+/* A blocking widget runs its own event loop, so the host's input dispatch never
+   sees it open or close -- it has to say so itself, at both ends, including the
+   cancelled and failed exits. */
 int cat_keyboard_ex(const char *initial_text, const char *help_text,
+                cat_keyboard_layout layout, SDL_Texture *backdrop,
+                cat_keyboard_result *result) {
+    cat_ui_feedback_emit(CAT_UI_SURFACE);
+    int rc = cat__keyboard_ex_impl(initial_text, help_text, layout, backdrop, result);
+    cat_ui_feedback_emit(CAT_UI_SURFACE);
+    return rc;
+}
+
+static int cat__keyboard_ex_impl(const char *initial_text, const char *help_text,
                 cat_keyboard_layout layout, SDL_Texture *backdrop,
                 cat_keyboard_result *result) {
     if (!result) return CAT_ERROR;
@@ -1893,10 +1973,15 @@ int cat_keyboard_ex(const char *initial_text, const char *help_text,
             while (cat_poll_input(&ev)) {
                 if (!ev.pressed) continue;
                 switch (ev.button) {
-                    case CAT_BTN_UP:    cursor_y = (cursor_y - 1 + kb_rows) % kb_rows; break;
-                    case CAT_BTN_DOWN:  cursor_y = (cursor_y + 1) % kb_rows; break;
-                    case CAT_BTN_LEFT:  cursor_x = (cursor_x - 1 + kb_cols) % kb_cols; break;
-                    case CAT_BTN_RIGHT: cursor_x = (cursor_x + 1) % kb_cols; break;
+                    /* The grid wraps in both axes, so key-to-key is always a move. */
+                    case CAT_BTN_UP:    cursor_y = (cursor_y - 1 + kb_rows) % kb_rows;
+                                        cat_ui_feedback_emit(CAT_UI_MOVED); break;
+                    case CAT_BTN_DOWN:  cursor_y = (cursor_y + 1) % kb_rows;
+                                        cat_ui_feedback_emit(CAT_UI_MOVED); break;
+                    case CAT_BTN_LEFT:  cursor_x = (cursor_x - 1 + kb_cols) % kb_cols;
+                                        cat_ui_feedback_emit(CAT_UI_MOVED); break;
+                    case CAT_BTN_RIGHT: cursor_x = (cursor_x + 1) % kb_cols;
+                                        cat_ui_feedback_emit(CAT_UI_MOVED); break;
                     case CAT_BTN_A: {
                         int ki = cursor_y * kb_cols + cursor_x;
                         if (ki < kb_rows * kb_cols && cat__kb_numeric[ki])
@@ -2012,23 +2097,28 @@ int cat_keyboard_ex(const char *initial_text, const char *help_text,
             if (!iev.pressed) continue;
 
             switch (iev.button) {
+                /* Rows and columns both wrap, so key-to-key is always a move. */
                 case CAT_BTN_UP:
                     cursor_row = (cursor_row - 1 + CAT__KB5_ROW_COUNT) % CAT__KB5_ROW_COUNT;
                     if (cursor_col > row_max_col[cursor_row])
                         cursor_col = row_max_col[cursor_row];
+                    cat_ui_feedback_emit(CAT_UI_MOVED);
                     break;
                 case CAT_BTN_DOWN:
                     cursor_row = (cursor_row + 1) % CAT__KB5_ROW_COUNT;
                     if (cursor_col > row_max_col[cursor_row])
                         cursor_col = row_max_col[cursor_row];
+                    cat_ui_feedback_emit(CAT_UI_MOVED);
                     break;
                 case CAT_BTN_LEFT:
                     cursor_col--;
                     if (cursor_col < 0) cursor_col = row_max_col[cursor_row];
+                    cat_ui_feedback_emit(CAT_UI_MOVED);
                     break;
                 case CAT_BTN_RIGHT:
                     cursor_col++;
                     if (cursor_col > row_max_col[cursor_row]) cursor_col = 0;
+                    cat_ui_feedback_emit(CAT_UI_MOVED);
                     break;
 
                 case CAT_BTN_A: {
@@ -2050,11 +2140,13 @@ int cat_keyboard_ex(const char *initial_text, const char *help_text,
                         if (cursor_col == 0) {
                             /* shift */
                             shift = !shift; symbols = false;
+                            cat_ui_feedback_emit(CAT_UI_ENTERED);
                         } else if (cursor_col <= r3n) {
                             cat__kb_insert(result, &text_cursor, r3[cursor_col - 1]);
                         } else {
                             /* symbol */
                             symbols = !symbols; shift = false;
+                            cat_ui_feedback_emit(CAT_UI_ENTERED);
                         }
                     } else if (cursor_row == 4) {
                         /* space bar */
@@ -2082,6 +2174,7 @@ int cat_keyboard_ex(const char *initial_text, const char *help_text,
                 case CAT_BTN_SELECT:
                     /* Toggle shift (Gabagool mapping) */
                     shift = !shift; symbols = false;
+                    cat_ui_feedback_emit(CAT_UI_ENTERED);
                     break;
 
                 case CAT_BTN_START:
@@ -2369,21 +2462,26 @@ int cat_url_keyboard(const char *initial_text, const char *help_text,
         while (cat_poll_input(&iev)) {
             if (!iev.pressed) continue;
             switch (iev.button) {
+                /* Rows and columns both wrap, so key-to-key is always a move. */
                 case CAT_BTN_UP:
                     cursor_row = (cursor_row - 1 + actual_total_rows) % actual_total_rows;
                     if (cursor_col > row_max[cursor_row]) cursor_col = row_max[cursor_row];
+                    cat_ui_feedback_emit(CAT_UI_MOVED);
                     break;
                 case CAT_BTN_DOWN:
                     cursor_row = (cursor_row + 1) % actual_total_rows;
                     if (cursor_col > row_max[cursor_row]) cursor_col = row_max[cursor_row];
+                    cat_ui_feedback_emit(CAT_UI_MOVED);
                     break;
                 case CAT_BTN_LEFT:
                     cursor_col--;
                     if (cursor_col < 0) cursor_col = row_max[cursor_row];
+                    cat_ui_feedback_emit(CAT_UI_MOVED);
                     break;
                 case CAT_BTN_RIGHT:
                     cursor_col++;
                     if (cursor_col > row_max[cursor_row]) cursor_col = 0;
+                    cat_ui_feedback_emit(CAT_UI_MOVED);
                     break;
 
                 case CAT_BTN_A: {
@@ -2441,8 +2539,10 @@ int cat_url_keyboard(const char *initial_text, const char *help_text,
                     else if (cursor_row == zxcv_row) {
                         if (cursor_col == 0) {
                             shift = !shift;
+                            cat_ui_feedback_emit(CAT_UI_ENTERED);
                         } else if (cursor_col == row_max[zxcv_row]) {
                             numbers = !numbers;
+                            cat_ui_feedback_emit(CAT_UI_ENTERED);
                         } else {
                             const char **r = numbers ? cat__kb5_row3_sym
                                            : (shift ? cat__kb5_row3_upper : cat__kb5_row3_lower);
@@ -2460,11 +2560,13 @@ int cat_url_keyboard(const char *initial_text, const char *help_text,
                 case CAT_BTN_X:
                     /* Toggle symbol alternates for shortcuts (not space in URL mode) */
                     sym_alt = !sym_alt;
+                    cat_ui_feedback_emit(CAT_UI_ENTERED);
                     break;
                 case CAT_BTN_Y:
                     return CAT_CANCELLED;
                 case CAT_BTN_SELECT:
                     shift = !shift;
+                    cat_ui_feedback_emit(CAT_UI_ENTERED);
                     break;
                 case CAT_BTN_START:
                     return CAT_OK;
@@ -3421,8 +3523,21 @@ static void cat__color_field_fill(SDL_Texture *tex, int w, int h, float sat) {
     SDL_UnlockTexture(tex);
 }
 
+static int cat__color_picker_ctx_impl(cat_draw_color initial, cat_draw_color *result,
+                                      cat_color_picker_context *context);
+
+/* Blocking, like cat_keyboard_ex -- it reports taking and returning the screen
+   itself, since the host's dispatch never sees either. */
 int cat_color_picker_ctx(cat_draw_color initial, cat_draw_color *result,
                          cat_color_picker_context *context) {
+    cat_ui_feedback_emit(CAT_UI_SURFACE);
+    int rc = cat__color_picker_ctx_impl(initial, result, context);
+    cat_ui_feedback_emit(CAT_UI_SURFACE);
+    return rc;
+}
+
+static int cat__color_picker_ctx_impl(cat_draw_color initial, cat_draw_color *result,
+                                      cat_color_picker_context *context) {
     if (!result) return CAT_ERROR;
     *result = initial;
 
@@ -5621,6 +5736,22 @@ dm_exit:
 #endif /* CAT_ENABLE_CURL */
 
 /* ═══════════════════════════════════════════════════════════════════════════
+ * UI Feedback Sink Implementation
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+static cat_ui_feedback_fn cat__ui_feedback_fn   = NULL;
+static void              *cat__ui_feedback_user = NULL;
+
+void cat_ui_feedback_set(cat_ui_feedback_fn fn, void *user) {
+    cat__ui_feedback_fn   = fn;
+    cat__ui_feedback_user = user;
+}
+
+void cat_ui_feedback_emit(cat_ui_feedback what) {
+    if (cat__ui_feedback_fn) cat__ui_feedback_fn(what, cat__ui_feedback_user);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
  * Non-Blocking List Pane Implementation
  * ═══════════════════════════════════════════════════════════════════════════ */
 
@@ -5640,23 +5771,38 @@ static void cat__ls_clamp(cat_list_state *s, int count) {
     (void)count;
 }
 
+/* move and page emit feedback; jump and clamp do not. The split is deliberate
+   and matches how they are actually used: move/page are what a button press
+   calls, jump/clamp are what code calls when it reloads a list or restores a
+   position. Feedback belongs to the presses. */
+
 void cat_list_state_move(cat_list_state *s, int delta, int count) {
-    if (!s || delta == 0 || count <= 0) return;
+    if (!s || delta == 0) return;
+    if (count <= 0) { cat_ui_feedback_emit(CAT_UI_EDGE); return; }
+    int before = s->cursor;
     /* Wrap around the ends (top<->bottom) rather than clamping, matching the
        tab navigation. Modulo keeps it correct for any delta magnitude. */
     int next = (s->cursor + delta) % count;
     if (next < 0) next += count;
     s->cursor = next;
     cat__ls_clamp(s, count);
+    /* Wrapping means this is nearly always a move; a single-item list is the
+       case that legitimately reports a boundary. */
+    cat_ui_feedback_emit(s->cursor != before ? CAT_UI_MOVED : CAT_UI_EDGE);
 }
 
 void cat_list_state_page(cat_list_state *s, int delta, int count) {
-    if (!s || delta == 0 || count <= 0) return;
+    if (!s || delta == 0) return;
+    if (count <= 0) { cat_ui_feedback_emit(CAT_UI_EDGE); return; }
+    int before = s->cursor;
     int next = s->cursor + s->visible_rows * delta;
     if (next < 0)     next = 0;
     if (next >= count) next = count - 1;
     s->cursor = next;
     cat__ls_clamp(s, count);
+    /* Unlike move, page clamps -- so sitting on the first or last item and
+       paging again is a real boundary. */
+    cat_ui_feedback_emit(s->cursor != before ? CAT_UI_MOVED : CAT_UI_EDGE);
 }
 
 void cat_list_state_jump(cat_list_state *s, int target, int count) {
@@ -5701,10 +5847,14 @@ int cat_list_state_jump_letter(cat_list_state *s,
         }
     }
 
+    /* Emits despite the name: every caller binds this straight to a button, so
+       it is an input verb like move and page, not a programmatic reposition. */
     if (best >= 0 && best != s->cursor) {
         cat_list_state_jump(s, best, count);
+        cat_ui_feedback_emit(CAT_UI_MOVED);
         return 1;
     }
+    cat_ui_feedback_emit(CAT_UI_EDGE);   /* no other initial letter to land on */
     return 0;
 }
 
@@ -5731,11 +5881,31 @@ void cat_scroll_state_init(cat_scroll_state *s) {
     if (s) { s->offset = 0; s->target = 0; }
 }
 
-void cat_scroll_state_move(cat_scroll_state *s, int delta_px) {
-    if (!s) return;
+/* have_max distinguishes "the caller knows its content height" from "clamp the
+   zero end and let the next draw sort out the rest". Only the former can tell
+   the bottom of the content from a scroll that is about to be undone. */
+static void cat__scroll_move(cat_scroll_state *s, int delta_px,
+                             int max_offset, bool have_max) {
     /* Steer the target; cat_draw_scroll_view eases the visible offset toward it. */
+    int before = s->target;
     s->target += delta_px;
     if (s->target < 0) s->target = 0;
+    if (have_max) {
+        if (max_offset <= 0)            s->target = 0;   /* content fits */
+        else if (s->target > max_offset) s->target = max_offset;
+    }
+    cat_ui_feedback_emit(s->target != before ? CAT_UI_MOVED : CAT_UI_EDGE);
+}
+
+void cat_scroll_state_move(cat_scroll_state *s, int delta_px) {
+    if (!s) return;
+    cat__scroll_move(s, delta_px, 0, false);
+}
+
+void cat_scroll_state_move_clamped(cat_scroll_state *s, int delta_px,
+                                   int max_offset) {
+    if (!s) return;
+    cat__scroll_move(s, delta_px, max_offset, true);
 }
 
 void cat_draw_scroll_view(int x, int y, int w, int h, int content_height,
