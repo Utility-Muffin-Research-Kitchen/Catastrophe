@@ -15,6 +15,7 @@ static void demo_detail(void);
 static void demo_detail_custom_fonts(void);
 static void demo_image_list(void);
 static void demo_options_list_immediate_return(void);
+static int demo_options_list_refresh_smoke(void);
 static void demo_process_advanced(void);
 static void demo_drawing_primitives(void);
 static void demo_screen_fade(void);
@@ -779,6 +780,40 @@ static void demo_options_list_immediate_return(void) {
 
         break;
     }
+}
+
+static int demo_options_list_refresh_smoke(void) {
+    cat_options_item items[40] = {0};
+    for (int i = 0; i < (int)(sizeof(items) / sizeof(items[0])); i++) {
+        items[i] = (cat_options_item){
+            .label = "Refresh fixture",
+            .type = CAT_OPT_CLICKABLE,
+        };
+    }
+    cat_options_list_opts opts = {
+        .title = "Refresh fixture",
+        .items = items,
+        .item_count = (int)(sizeof(items) / sizeof(items[0])),
+        .initial_selected_index = 20,
+        .visible_start_index = 18,
+        .refresh_interval_ms = 25,
+    };
+    cat_options_list_result result = {0};
+    uint32_t started = SDL_GetTicks();
+    int rc = cat_options_list(&opts, &result);
+    uint32_t elapsed = SDL_GetTicks() - started;
+    if (rc != CAT_OK || result.action != CAT_ACTION_REFRESH ||
+        result.focused_index != 20 || result.visible_start_index != 18 ||
+        elapsed < 25 || elapsed > 1000) {
+        fprintf(stderr,
+                "options refresh smoke failed: rc=%d action=%d focus=%d scroll=%d elapsed=%u\n",
+                rc, result.action, result.focused_index,
+                result.visible_start_index, elapsed);
+        return 1;
+    }
+    printf("PASS options refresh: focus=%d scroll=%d elapsed=%u ms\n",
+           result.focused_index, result.visible_start_index, elapsed);
+    return 0;
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -3112,8 +3147,6 @@ static const struct {
 #define DEMO_COUNT (int)(sizeof(demos) / sizeof(demos[0]))
 
 int main(int argc, char *argv[]) {
-    (void)argc; (void)argv;
-
     cat_config cfg = {
         .window_title = "Catastrophe Widget Demo",
         .log_path     = cat_resolve_log_path("demo"),
@@ -3123,6 +3156,12 @@ int main(int argc, char *argv[]) {
         return 1;
     }
     cat_log("demo: startup");
+
+    if (argc == 2 && strcmp(argv[1], "--options-refresh-smoke") == 0) {
+        int result = demo_options_list_refresh_smoke();
+        cat_quit();
+        return result;
+    }
 
     int last_index = 0;
     int last_visible_start = 0;
