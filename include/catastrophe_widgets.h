@@ -156,6 +156,7 @@ typedef struct {
     const char        *help_text;
     uint32_t           input_delay;
     bool               return_on_option_change; /* Return CAT_ACTION_OPTION_CHANGED after cycling a standard option */
+    uint32_t           refresh_interval_ms; /* Return CAT_ACTION_REFRESH after this interval; 0 disables */
     TTF_Font          *label_font;       /* Override option label text (default: CAT_FONT_LARGE) */
     TTF_Font          *value_font;       /* Override option value text (default: CAT_FONT_TINY) */
 } cat_options_list_opts;
@@ -1271,6 +1272,12 @@ int cat_options_list(cat_options_list_opts *opts, cat_options_list_result *resul
     bool     pill_anim_initialized = false;
     int      pill_prev_target_y    = 0;
     int      last_cursor           = cursor;
+    uint32_t refresh_at            = opts->refresh_interval_ms > 0
+        ? SDL_GetTicks() + opts->refresh_interval_ms : 0;
+
+    if (opts->refresh_interval_ms > 0) {
+        cat_request_frame_in(opts->refresh_interval_ms);
+    }
 
     bool running = true;
 
@@ -1433,6 +1440,12 @@ int cat_options_list(cat_options_list_opts *opts, cat_options_list_result *resul
                     }
                     break;
             }
+        }
+
+        if (running && refresh_at != 0 && (int32_t)(now - refresh_at) >= 0) {
+            result->focused_index = cursor;
+            result->action = CAT_ACTION_REFRESH;
+            running = false;
         }
 
         /* Scroll */
