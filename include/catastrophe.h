@@ -3302,14 +3302,41 @@ static void cat__set_axis_direction_x(int dir, uint32_t now) {
  * Tracks every opened joystick/controller by SDL instance id so any connected
  * pad can drive the focused view. Pads SDL recognises as game controllers
  * (SDL_IsGameController, e.g. Bluetooth Xbox pads) are opened via
- * SDL_GameControllerOpen and use the canonical mapping; everything else (the
- * virtual "Loong Gamepad" uinput clone) stays on the raw platform map. */
+ * SDL_GameControllerOpen and use the canonical mapping; the built-in pad and
+ * Jawaka's virtual "Loong Gamepad" clone stay on the raw platform map even
+ * though SDL recognises them, because SDL's mapping for that name reports the
+ * face buttons swapped relative to the hardware. */
 
 static int cat__pad_find(SDL_JoystickID id) {
     for (int i = 0; i < CAT__MAX_PADS; i++) {
         if (cat__g.pads[i].id == id) return i;
     }
     return -1;
+}
+
+/* True only for pads driven through the GameController API, whose input
+ * already arrives as canonical CONTROLLERBUTTON/AXIS events — the duplicate
+ * raw joystick events must be dropped. Pads left on the platform map are
+ * registered too, so testing mere registration would silently swallow every
+ * button the built-in pad sends. */
+static bool cat__pad_is_controller(SDL_JoystickID id) CAT__MAYBE_UNUSED;
+static bool cat__pad_is_controller(SDL_JoystickID id) {
+    int i = cat__pad_find(id);
+    return i >= 0 && cat__g.pads[i].gc != NULL;
+}
+
+/* The built-in pad and Jawaka's calibrated uinput clone of it share this
+ * name. SDL carries a built-in controller mapping for it, but that mapping
+ * disagrees with the hardware: the device reports Xbox-style button indices
+ * while its face buttons sit in the Nintendo positions (A is East). The
+ * platform raw map already encodes that layout, so this pad stays off the
+ * GameController path no matter what SDL_IsGameController claims — otherwise
+ * A and B come back swapped throughout the UI. */
+#define CAT__BUILTIN_PAD_NAME "Loong Gamepad"
+
+static bool cat__pad_prefers_raw_map(int device_index) {
+    const char *name = SDL_JoystickNameForIndex(device_index);
+    return name && SDL_strcmp(name, CAT__BUILTIN_PAD_NAME) == 0;
 }
 
 /* Register an SDL joystick device (device index, not instance id). */
@@ -3320,7 +3347,8 @@ static void cat__pad_add_index(int device_index) {
     for (int i = 0; i < CAT__MAX_PADS; i++) {
         if (cat__g.pads[i].id != -1) continue;
         cat__pad *p = &cat__g.pads[i];
-        if (SDL_IsGameController(device_index)) {
+        if (SDL_IsGameController(device_index) &&
+            !cat__pad_prefers_raw_map(device_index)) {
             p->gc = SDL_GameControllerOpen(device_index);
             if (!p->gc) continue; /* SDL may reject between enumerate and open */
             p->joy = SDL_GameControllerGetJoystick(p->gc);
@@ -3420,14 +3448,14 @@ static void cat__handle_sdl_event(SDL_Event *ev, uint32_t now) {
            canonically, and the raw mappings differ, causing phantom inputs. */
         #if !defined(PLATFORM_MY355)
         case SDL_JOYBUTTONDOWN: {
-            if (cat__pad_find(ev->jbutton.which) >= 0) break; /* GameController handles this */
+            if (cat__pad_is_controller(ev->jbutton.which)) break; /* GameController handles this */
             cat_button b = cat__map_joy_button(ev->jbutton.button);
             cat__push_button_press(b, now);
             break;
         }
 
         case SDL_JOYBUTTONUP: {
-            if (cat__pad_find(ev->jbutton.which) >= 0) break; /* GameController handles this */
+            if (cat__pad_is_controller(ev->jbutton.which)) break; /* GameController handles this */
             cat_button b = cat__map_joy_button(ev->jbutton.button);
             cat__push_button_release(b);
             break;
@@ -3518,7 +3546,7 @@ static void cat__handle_sdl_event(SDL_Event *ev, uint32_t now) {
         }
 
         case SDL_JOYHATMOTION: {
-            if (cat__pad_find(ev->jhat.which) >= 0) break; /* GameController handles d-pad */
+            if (cat__pad_is_controller(ev->jhat.which)) break; /* GameController handles d-pad */
             cat__set_hat_state(ev->jhat.value, now);
             break;
         }
@@ -3526,8 +3554,11 @@ static void cat__handle_sdl_event(SDL_Event *ev, uint32_t now) {
         case SDL_JOYDEVICEADDED:
             /* Controller-recognised pads are opened by CONTROLLERDEVICEADDED
              * (fired right after); open everything else as a raw joystick so
-             * the existing platform map keeps working for it. */
-            if (!SDL_IsGameController(ev->jdevice.which)) {
+             * the existing platform map keeps working for it. The built-in pad
+             * is claimed here even though SDL recognises it, because it stays
+             * on the platform map either way and registering twice is a no-op. */
+            if (!SDL_IsGameController(ev->jdevice.which) ||
+                cat__pad_prefers_raw_map(ev->jdevice.which)) {
                 cat__pad_add_index(ev->jdevice.which);
             }
             break;
@@ -3547,7 +3578,7 @@ static void cat__handle_sdl_event(SDL_Event *ev, uint32_t now) {
            Thumbstick generates SDL_JOYAXISMOTION on all devices including
            MY355, so this must remain outside the MY355 exclusion guard. */
         case SDL_JOYAXISMOTION: {
-            if (cat__pad_find(ev->jaxis.which) >= 0) break; /* GameController handles axes */
+            if (cat__pad_is_controller(ev->jaxis.which)) break; /* GameController handles axes */
             if (ev->jaxis.axis == 1) { /* Y axis (up/down) */
                 if (ev->jaxis.value < -CAT_AXIS_DEADZONE) {
                     cat__set_axis_direction_y(-1, now);
