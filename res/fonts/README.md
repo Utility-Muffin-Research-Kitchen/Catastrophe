@@ -33,7 +33,7 @@ Themes can use any bundled font by pointing at its path relative to `res/fonts/`
 "ui": {
   "ui_font": { "path": "fonts/SpaceGrotesk/SpaceGrotesk-Regular.ttf", "size": 36 }
 },
-"cjk_font": { "path": "fonts/SourceHanSansCN/SourceHanSansCN-Heavy.otf", "size": 36 }
+"cjk_font": { "path": "fonts/SourceHanSansCN/SourceHanSansCN-Regular.otf", "size": 36 }
 ```
 
 The font loader searches `./res/fonts/<path>` and `../res/fonts/<path>` automatically,

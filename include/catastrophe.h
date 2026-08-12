@@ -778,6 +778,14 @@ typedef struct {
     /* Same glyph-complete base font, sized for footer/hint pills (not LARGE). */
     TTF_Font     *symbol_font_small;
     int           symbol_font_small_bump;
+    /* CJK face from the stylesheet's cjk_font slot, opened lazily per tier. The
+       themed families carry no CJK at all, so a Chinese or Japanese ROM name
+       renders as tofu without this. Substituted per string, not per glyph:
+       whole-string, so no run splitting and no metric surprises. */
+    TTF_Font     *cjk_fonts[CAT_FONT_TIER_COUNT];
+    int           cjk_font_bump;
+    char          cjk_font_rel[512];   /* stylesheet-relative, "" = none declared */
+    bool          cjk_font_missing;    /* resolution already failed; stop retrying */
 
     /* Input state */
     bool          face_buttons_flipped;
@@ -2752,6 +2760,133 @@ static TTF_Font *cat__get_symbol_font_small(void) {
     return cat__g.symbol_font_small ? cat__g.symbol_font_small : cat_get_font(CAT_FONT_SMALL);
 }
 
+/* ─── CJK text fallback ──────────────────────────────────────────────────
+ * None of the themed families carry CJK, so a Chinese or Japanese ROM name
+ * renders as tofu. Rather than split a string into per-script runs (which would
+ * mean measuring and positioning each run, and rewriting every draw entry
+ * point), substitute the whole string onto the stylesheet's cjk_font when it
+ * contains any CJK codepoint. Mixed "游戏 Game" strings render entirely in the
+ * CJK face, which is fine: Source Han Sans has full Latin coverage.
+ *
+ * The substitution MUST happen identically in drawing and in measurement, or
+ * ellipsizing and the marquee compute widths against a different face than the
+ * one that renders. Both go through cat__font_for_text for that reason. */
+
+/* True if the UTF-8 string contains a codepoint that the Latin families lack.
+   Covers CJK Unified plus Ext-A, compatibility ideographs, CJK punctuation,
+   fullwidth forms, and kana -- Japanese ROM names are as common as Chinese
+   ones. Decodes only far enough to classify; malformed bytes are skipped. */
+static bool cat__text_has_cjk(const char *s) {
+    if (!s) return false;
+    for (const unsigned char *p = (const unsigned char *)s; *p; ) {
+        uint32_t cp;
+        int len;
+        if (*p < 0x80)            { p++; continue; }        /* ASCII fast path */
+        else if ((*p & 0xE0) == 0xC0) { cp = *p & 0x1Fu; len = 2; }
+        else if ((*p & 0xF0) == 0xE0) { cp = *p & 0x0Fu; len = 3; }
+        else if ((*p & 0xF8) == 0xF0) { cp = *p & 0x07u; len = 4; }
+        else                      { p++; continue; }        /* stray continuation */
+        int i = 1;
+        for (; i < len; i++) {
+            if ((p[i] & 0xC0) != 0x80) break;               /* truncated sequence */
+            cp = (cp << 6) | (uint32_t)(p[i] & 0x3Fu);
+        }
+        if (i < len) { p++; continue; }
+        p += len;
+        if ((cp >= 0x3000u && cp <= 0x30FFu) ||   /* CJK punctuation + kana     */
+            (cp >= 0x3400u && cp <= 0x4DBFu) ||   /* CJK Unified Ext-A          */
+            (cp >= 0x4E00u && cp <= 0x9FFFu) ||   /* CJK Unified                */
+            (cp >= 0xF900u && cp <= 0xFAFFu) ||   /* compatibility ideographs   */
+            (cp >= 0xFF00u && cp <= 0xFFEFu))     /* fullwidth / halfwidth forms*/
+            return true;
+    }
+    return false;
+}
+
+/* Resolve the stylesheet's cjk_font path the same way cat__load_fonts resolves a
+   themed family: absolute, then CAT_FONTS_DIR, then the shared res/fonts tree. */
+static bool cat__resolve_cjk_font_path(const char *rel, char *out, size_t out_size) {
+    if (!rel || !rel[0]) return false;
+    if (rel[0] == '/') {
+        snprintf(out, out_size, "%s", rel);
+        return access(out, R_OK) == 0;
+    }
+    const char *fd = cat__env_nonempty("CAT_FONTS_DIR");
+    if (fd) {
+        snprintf(out, out_size, "%s/%s", fd, rel);
+        if (access(out, R_OK) == 0) return true;
+    }
+#if defined(PLATFORM_MLP1)
+    char launcher_buf[PATH_MAX];
+    const char *launcher = cat__launcher_path(launcher_buf, sizeof(launcher_buf));
+    if (launcher &&
+        snprintf(out, out_size, "%s/res/%s", launcher, rel) < (int)out_size &&
+        access(out, R_OK) == 0)
+        return true;
+#endif
+    const char *prefixes[] = { "./res/", "../res/", "../../res/", NULL };
+    for (int i = 0; prefixes[i]; i++) {
+        snprintf(out, out_size, "%s%s", prefixes[i], rel);
+        if (access(out, R_OK) == 0) return true;
+    }
+    return false;
+}
+
+/* The CJK face at the same size as `base`. Tier is recovered by pointer
+   identity against the loaded tiers, which is exact -- deriving a size from
+   TTF_FontHeight would guess. Returns `base` unchanged when no cjk_font is
+   declared, when it cannot be resolved, or when `base` is not a tier font
+   (the symbol fonts, which are already glyph-complete). */
+static TTF_Font *cat__cjk_font_for(TTF_Font *base) {
+    if (!base || cat__g.cjk_font_missing) return base;
+
+    const cat_stylesheet *ss = cat_get_stylesheet();
+    const char *rel = ss ? ss->cjk_font.path : NULL;
+    if (!rel || !rel[0]) { cat__g.cjk_font_missing = true; return base; }
+
+    int tier = -1;
+    for (int i = 0; i < CAT_FONT_TIER_COUNT; i++) {
+        if (cat__g.fonts[i] == base) { tier = i; break; }
+    }
+    if (tier < 0) return base;
+
+    /* A theme switch changes the declared face, and a font-size change invalidates
+       every open size. Either drops the whole cache. */
+    if (cat__g.cjk_font_bump != cat__g.font_bump ||
+        strcmp(cat__g.cjk_font_rel, rel) != 0) {
+        for (int i = 0; i < CAT_FONT_TIER_COUNT; i++) {
+            if (cat__g.cjk_fonts[i]) {
+                TTF_CloseFont(cat__g.cjk_fonts[i]);
+                cat__g.cjk_fonts[i] = NULL;
+            }
+        }
+        cat__text_cache_clear();
+        cat__str_copy(cat__g.cjk_font_rel, sizeof(cat__g.cjk_font_rel), rel);
+        cat__g.cjk_font_bump = cat__g.font_bump;
+    }
+
+    if (!cat__g.cjk_fonts[tier]) {
+        char path[PATH_MAX];
+        if (!cat__resolve_cjk_font_path(rel, path, sizeof(path))) {
+            cat__g.cjk_font_missing = true;   /* warn once by omission, never per frame */
+            return base;
+        }
+        int size = cat_font_size_for_resolution(cat__font_base_sizes[tier] + cat__g.font_bump);
+        if (size < 8) size = 8;
+        cat__g.cjk_fonts[tier] = cat__open_font(path, size);
+        if (!cat__g.cjk_fonts[tier]) { cat__g.cjk_font_missing = true; return base; }
+    }
+    return cat__g.cjk_fonts[tier];
+}
+
+/* The single substitution point. Cheap for the common case: an ASCII-only
+   string exits cat__text_has_cjk on the fast path without touching the
+   stylesheet or the font cache. */
+static TTF_Font *cat__font_for_text(TTF_Font *font, const char *text) {
+    if (!text || !text[0] || !cat__text_has_cjk(text)) return font;
+    return cat__cjk_font_for(font);
+}
+
 int cat_get_font_bump(void) {
     return cat__g.font_bump;
 }
@@ -4154,6 +4289,7 @@ static void cat__text_cache_clear(void) {
 }
 
 int cat_draw_text(TTF_Font *font, const char *text, int x, int y, cat_draw_color color) {
+    font = cat__font_for_text(font, text);   /* draw and measure must agree */
     if (!font || !text || !text[0]) return 0;
 
     cat_text_cache_entry *e = cat__text_cache_get(font, text, color);
@@ -4167,6 +4303,7 @@ int cat_draw_text(TTF_Font *font, const char *text, int x, int y, cat_draw_color
 }
 
 int cat_draw_text_clipped(TTF_Font *font, const char *text, int x, int y, cat_draw_color color, int max_w) {
+    font = cat__font_for_text(font, text);   /* draw and measure must agree */
     if (!font || !text || !text[0]) return 0;
     if (max_w <= 0) return cat_draw_text(font, text, x, y, color);
 
@@ -4196,6 +4333,7 @@ int cat_draw_text_clipped(TTF_Font *font, const char *text, int x, int y, cat_dr
 }
 
 int cat_draw_text_ellipsized(TTF_Font *font, const char *text, int x, int y, cat_draw_color color, int max_w) {
+    font = cat__font_for_text(font, text);   /* draw and measure must agree */
     if (!font || !text || !text[0]) return 0;
     if (max_w <= 0) return cat_draw_text(font, text, x, y, color);
 
@@ -4250,6 +4388,7 @@ int cat_draw_text_ellipsized(TTF_Font *font, const char *text, int x, int y, cat
 }
 
 int cat_measure_text_ellipsized(TTF_Font *font, const char *text, int max_w) {
+    font = cat__font_for_text(font, text);   /* draw and measure must agree */
     if (!font || !text || !text[0]) return 0;
     if (max_w <= 0) return 0;
 
@@ -4303,6 +4442,7 @@ int cat_measure_text_ellipsized(TTF_Font *font, const char *text, int max_w) {
 }
 
 int cat_draw_text_wrapped(TTF_Font *font, const char *text, int x, int y, int max_w, cat_draw_color color, cat_text_align align) {
+    font = cat__font_for_text(font, text);   /* draw and measure must agree */
     if (!font || !text || !text[0] || max_w <= 0) return 0;
 
     /* Word wrap: break text into lines that fit within max_w */
@@ -4449,6 +4589,7 @@ static int cat__wrapped_line_count(TTF_Font *font, const char *text, int max_w) 
 }
 
 int cat_measure_text(TTF_Font *font, const char *text) {
+    font = cat__font_for_text(font, text);   /* draw and measure must agree */
     if (!font || !text || !text[0]) return 0;
     if (cat__text_cacheable(text)) {
         cat_text_cache_entry *e =
@@ -4461,6 +4602,7 @@ int cat_measure_text(TTF_Font *font, const char *text) {
 }
 
 int cat_measure_wrapped_text_height(TTF_Font *font, const char *text, int max_w) {
+    font = cat__font_for_text(font, text);   /* draw and measure must agree */
     if (!font || !text || !text[0] || max_w <= 0) return 0;
     return cat__wrapped_line_count(font, text, max_w) * TTF_FontLineSkip(font);
 }
@@ -4870,6 +5012,7 @@ bool cat_draw_text_marquee(TTF_Font *font, const char *text, int x, int y,
                            cat_draw_color color, int visible_w,
                            cat_marquee *m, uint32_t dt_ms) {
     if (!font || !text) return false;
+    font = cat__font_for_text(font, text);   /* draw and measure must agree */
 
     int text_w = cat_measure_text(font, text);
     if (visible_w <= 0 || text_w <= visible_w) {
