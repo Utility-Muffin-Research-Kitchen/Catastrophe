@@ -163,6 +163,15 @@
 /* Footer layout bookkeeping */
 #define CAT__MAX_FOOTER_ITEMS 64
 
+/* Input devices: max simultaneously tracked SDL joysticks/controllers */
+#define CAT__MAX_PADS 8
+
+/* Idle poll() wake descriptors (device only): bounded collection of non-grabbing,
+   read-only evdev fds (virtual pad + external controllers). */
+#define CAT__WAKE_MAX_FDS   4
+#define CAT__WAKE_PATH_MAX  64
+#define CAT__WAKE_RESCAN_MS 3000
+
 /* Max log message length */
 #define CAT_MAX_LOG_LEN 2048
 
@@ -734,12 +743,23 @@ typedef struct {
  * Internal State (opaque to user, but defined here for header-only use)
  * ═══════════════════════════════════════════════════════════════════════════ */
 
+/* Tracked input device; gc set => opened via SDL_GameControllerOpen and the
+   underlying joystick is owned by it, joy set without gc => raw SDL joystick
+   (e.g. the virtual Loong pad) using the platform button map. */
+typedef struct {
+    SDL_JoystickID      id;   /* -1 = empty slot */
+    SDL_GameController *gc;
+    SDL_Joystick       *joy;
+} cat__pad;
+
 typedef struct {
     /* SDL */
     SDL_Window         *window;
     SDL_Renderer       *renderer;
     SDL_Joystick       *joystick;
     SDL_GameController *controller;
+    cat__pad            pads[CAT__MAX_PADS];
+    int                 pad_count;
     SDL_Texture        *bg_texture;
     SDL_Texture        *rounded_scratch;     /* render target for cat_draw_image_rounded_ex */
     int                 rounded_scratch_w;
@@ -750,7 +770,11 @@ typedef struct {
     uint32_t            last_present_ms;
     bool                needs_frame;       /* true = render next frame at 60fps */
     uint32_t            next_redraw_ms;    /* absolute time of next scheduled redraw (0 = none) */
-    int                 input_fd;          /* gamepad evdev fd for idle poll() wake (-1 = unavailable) */
+    int                 wake_fds[CAT__WAKE_MAX_FDS];      /* evdev fds for idle poll() wake (-1 = unused) */
+    char                wake_paths[CAT__WAKE_MAX_FDS][CAT__WAKE_PATH_MAX];
+    int                 wake_fd_count;
+    uint32_t            wake_rescan_ms;    /* next periodic wake-set rescan */
+    bool                wake_dirty;        /* pads added/removed: rebind wake fds early */
     bool                input_backend_ready; /* joystick subsystem + devices opened */
 
     /* Scaling */
@@ -792,6 +816,12 @@ typedef struct {
     uint32_t      hat_repeat_time;
     int           axis_held_dir_y;   /* -1=up, +1=down, 0=none */
     int           axis_held_dir_x;   /* -1=left, +1=right, 0=none */
+    /* Last canonical stick positions (GameController path), for left/right
+       stick arbitration — left wins, right drives only while left is idle. */
+    int           axis_stick_lx;
+    int           axis_stick_ly;
+    int           axis_stick_rx;
+    int           axis_stick_ry;
     uint32_t      axis_repeat_time_y;
     uint32_t      axis_repeat_time_x;
 
@@ -2812,9 +2842,8 @@ static cat_button cat__map_joy_button(uint8_t btn) {
 }
 #endif
 
-/* Map SDL GameController button to virtual button (used on macOS / when SDL
- * recognises the device as a standard game controller) */
-#if !CAT_PLATFORM_IS_DEVICE
+/* Map SDL GameController button to virtual button (used on macOS and for any
+ * SDL-recognised external controller, e.g. Bluetooth pads on MLP1) */
 static cat_button cat__map_controller_button(uint8_t btn) {
     cat_button mapped = CAT_BTN_NONE;
     switch (btn) {
@@ -2827,6 +2856,7 @@ static cat_button cat__map_controller_button(uint8_t btn) {
         case SDL_CONTROLLER_BUTTON_BACK:          mapped = CAT_BTN_SELECT; break;
         case SDL_CONTROLLER_BUTTON_START:         mapped = CAT_BTN_START;  break;
         case SDL_CONTROLLER_BUTTON_GUIDE:         mapped = CAT_BTN_MENU;   break;
+        case SDL_CONTROLLER_BUTTON_LEFTSTICK:     mapped = CAT_BTN_STICK;  break;
         case SDL_CONTROLLER_BUTTON_DPAD_UP:       mapped = CAT_BTN_UP;     break;
         case SDL_CONTROLLER_BUTTON_DPAD_DOWN:     mapped = CAT_BTN_DOWN;   break;
         case SDL_CONTROLLER_BUTTON_DPAD_LEFT:     mapped = CAT_BTN_LEFT;   break;
@@ -2842,7 +2872,6 @@ static cat_button cat__map_controller_button(uint8_t btn) {
     }
     return mapped;
 }
-#endif
 
 /* Map SDL keyboard to virtual button.
  * On my355 we match by scancode (the Flip sends buttons as keyboard HID scancodes).
@@ -3269,6 +3298,97 @@ static void cat__set_axis_direction_x(int dir, uint32_t now) {
     }
 }
 
+/* ─── Pad registry + hotplug ───────────────────────────────────────────────
+ * Tracks every opened joystick/controller by SDL instance id so any connected
+ * pad can drive the focused view. Pads SDL recognises as game controllers
+ * (SDL_IsGameController, e.g. Bluetooth Xbox pads) are opened via
+ * SDL_GameControllerOpen and use the canonical mapping; everything else (the
+ * virtual "Loong Gamepad" uinput clone) stays on the raw platform map. */
+
+static int cat__pad_find(SDL_JoystickID id) {
+    for (int i = 0; i < CAT__MAX_PADS; i++) {
+        if (cat__g.pads[i].id == id) return i;
+    }
+    return -1;
+}
+
+/* Register an SDL joystick device (device index, not instance id). */
+static void cat__pad_add_index(int device_index) CAT__MAYBE_UNUSED;
+static void cat__pad_add_index(int device_index) {
+    SDL_JoystickID existing = SDL_JoystickGetDeviceInstanceID(device_index);
+    if (existing >= 0 && cat__pad_find(existing) >= 0) return;
+    for (int i = 0; i < CAT__MAX_PADS; i++) {
+        if (cat__g.pads[i].id != -1) continue;
+        cat__pad *p = &cat__g.pads[i];
+        if (SDL_IsGameController(device_index)) {
+            p->gc = SDL_GameControllerOpen(device_index);
+            if (!p->gc) continue; /* SDL may reject between enumerate and open */
+            p->joy = SDL_GameControllerGetJoystick(p->gc);
+            p->id  = SDL_JoystickInstanceID(p->joy);
+            cat_log("Game controller opened: %s",
+                    SDL_GameControllerName(p->gc) ? SDL_GameControllerName(p->gc) : "?");
+        } else {
+            p->joy = SDL_JoystickOpen(device_index);
+            if (!p->joy) continue;
+            p->gc  = NULL;
+            p->id  = SDL_JoystickInstanceID(p->joy);
+            cat_log("Joystick opened: %s",
+                    SDL_JoystickName(p->joy) ? SDL_JoystickName(p->joy) : "?");
+        }
+        if (p->id < 0) { /* should not happen; undo partial slot */
+            if (p->gc) SDL_GameControllerClose(p->gc);
+            else if (p->joy) SDL_JoystickClose(p->joy);
+            p->id = -1; p->gc = NULL; p->joy = NULL;
+            continue;
+        }
+        cat__g.pad_count++;
+        /* Legacy single-device fields: first controller / first raw joystick. */
+        if (p->gc && !cat__g.controller) {
+            cat__g.controller = p->gc;
+            cat__g.joystick   = p->joy;
+        } else if (!p->gc && !cat__g.joystick) {
+            cat__g.joystick = p->joy;
+        }
+        cat__g.wake_dirty = true;
+        return;
+    }
+}
+
+static void cat__pad_remove(SDL_JoystickID id) CAT__MAYBE_UNUSED;
+static void cat__pad_remove(SDL_JoystickID id) {
+    int i = cat__pad_find(id);
+    if (i < 0) return;
+    cat__pad *p = &cat__g.pads[i];
+    cat_log("Input device removed: %s", p->gc
+        ? (SDL_GameControllerName(p->gc) ? SDL_GameControllerName(p->gc) : "?")
+        : (p->joy && SDL_JoystickName(p->joy) ? SDL_JoystickName(p->joy) : "?"));
+    if (p->gc) {
+        SDL_GameControllerClose(p->gc);
+        cat__g.controller = NULL;
+        cat__g.joystick   = NULL;
+        /* Don't leave a stick-hold lingering from the disconnected pad. */
+        cat__g.axis_stick_lx = cat__g.axis_stick_ly = 0;
+        cat__g.axis_stick_rx = cat__g.axis_stick_ry = 0;
+    } else if (p->joy) {
+        SDL_JoystickClose(p->joy);
+        cat__g.joystick = NULL;
+    }
+    p->id = -1; p->gc = NULL; p->joy = NULL;
+    cat__g.pad_count--;
+    /* Repoint legacy fields at remaining devices. */
+    for (int k = 0; k < CAT__MAX_PADS; k++) {
+        if (cat__g.pads[k].id == -1) continue;
+        if (cat__g.pads[k].gc && !cat__g.controller) {
+            cat__g.controller = cat__g.pads[k].gc;
+            cat__g.joystick   = cat__g.pads[k].joy;
+        }
+        if (!cat__g.pads[k].gc && !cat__g.joystick) {
+            cat__g.joystick = cat__g.pads[k].joy;
+        }
+    }
+    cat__g.wake_dirty = true;
+}
+
 static void cat__handle_sdl_event(SDL_Event *ev, uint32_t now) {
     switch (ev->type) {
         case SDL_QUIT:
@@ -3291,30 +3411,37 @@ static void cat__handle_sdl_event(SDL_Event *ev, uint32_t now) {
             break;
         }
 
-        /* --- Raw Joystick button/hat events (TrimUI devices) ---
+        /* --- Raw Joystick button/hat events (TrimUI devices and any pad SDL
+           does not recognise as a game controller) ---
            MY355 sends buttons and d-pad as keyboard scancodes; processing
            joystick button/hat events too would cause double-input.
-           When a GameController is active (macOS), skip raw joystick
-           button/hat events — the GameController API already maps them
-           correctly, and the raw mappings differ, causing phantom inputs.
-           Axis events (thumbstick) are allowed through on all platforms. */
+           For devices opened as GameControllers, skip the raw joystick
+           button/hat/axis events — the GameController API already maps them
+           canonically, and the raw mappings differ, causing phantom inputs. */
         #if !defined(PLATFORM_MY355)
         case SDL_JOYBUTTONDOWN: {
-            if (cat__g.controller) break; /* GameController handles this */
+            if (cat__pad_find(ev->jbutton.which) >= 0) break; /* GameController handles this */
             cat_button b = cat__map_joy_button(ev->jbutton.button);
             cat__push_button_press(b, now);
             break;
         }
 
         case SDL_JOYBUTTONUP: {
-            if (cat__g.controller) break; /* GameController handles this */
+            if (cat__pad_find(ev->jbutton.which) >= 0) break; /* GameController handles this */
             cat_button b = cat__map_joy_button(ev->jbutton.button);
             cat__push_button_release(b);
             break;
         }
 
         /* --- SDL GameController events (macOS / recognised controllers) --- */
-        #if !CAT_PLATFORM_IS_DEVICE
+        case SDL_CONTROLLERDEVICEADDED:
+            cat__pad_add_index(ev->cdevice.which); /* which = device index */
+            break;
+
+        case SDL_CONTROLLERDEVICEREMOVED:
+            cat__pad_remove(ev->cdevice.which);    /* which = instance id */
+            break;
+
         case SDL_CONTROLLERBUTTONDOWN: {
             cat_button b = cat__map_controller_button(ev->cbutton.button);
             cat__push_button_press(b, now);
@@ -3328,22 +3455,47 @@ static void cat__handle_sdl_event(SDL_Event *ev, uint32_t now) {
         }
 
         case SDL_CONTROLLERAXISMOTION: {
-            /* Map left analog stick to d-pad via GameController axis */
-            if (ev->caxis.axis == SDL_CONTROLLER_AXIS_LEFTY) {
-                if (ev->caxis.value < -CAT_AXIS_DEADZONE) {
-                    cat__set_axis_direction_y(-1, now);
-                } else if (ev->caxis.value > CAT_AXIS_DEADZONE) {
-                    cat__set_axis_direction_y(1, now);
+            /* Sticks drive directional input past CAT_AXIS_DEADZONE. Track the
+               last canonical positions of both sticks and arbitrate on every
+               event: the left stick wins, the right stick drives only while the
+               left sits inside the deadzone — no phantoms, no stuck holds. */
+            if (ev->caxis.axis == SDL_CONTROLLER_AXIS_LEFTX ||
+                ev->caxis.axis == SDL_CONTROLLER_AXIS_RIGHTX) {
+                if (ev->caxis.axis == SDL_CONTROLLER_AXIS_LEFTX) {
+                    cat__g.axis_stick_lx = ev->caxis.value;
                 } else {
-                    cat__set_axis_direction_y(0, now);
+                    cat__g.axis_stick_rx = ev->caxis.value;
                 }
-            } else if (ev->caxis.axis == SDL_CONTROLLER_AXIS_LEFTX) {
-                if (ev->caxis.value < -CAT_AXIS_DEADZONE) {
+                int x = cat__g.axis_stick_rx;
+                if (cat__g.axis_stick_lx < -CAT_AXIS_DEADZONE ||
+                    cat__g.axis_stick_lx >  CAT_AXIS_DEADZONE) {
+                    x = cat__g.axis_stick_lx; /* left stick wins */
+                }
+                if (x < -CAT_AXIS_DEADZONE) {
                     cat__set_axis_direction_x(-1, now);
-                } else if (ev->caxis.value > CAT_AXIS_DEADZONE) {
+                } else if (x > CAT_AXIS_DEADZONE) {
                     cat__set_axis_direction_x(1, now);
                 } else {
                     cat__set_axis_direction_x(0, now);
+                }
+            } else if (ev->caxis.axis == SDL_CONTROLLER_AXIS_LEFTY ||
+                       ev->caxis.axis == SDL_CONTROLLER_AXIS_RIGHTY) {
+                if (ev->caxis.axis == SDL_CONTROLLER_AXIS_LEFTY) {
+                    cat__g.axis_stick_ly = ev->caxis.value;
+                } else {
+                    cat__g.axis_stick_ry = ev->caxis.value;
+                }
+                int y = cat__g.axis_stick_ry;
+                if (cat__g.axis_stick_ly < -CAT_AXIS_DEADZONE ||
+                    cat__g.axis_stick_ly >  CAT_AXIS_DEADZONE) {
+                    y = cat__g.axis_stick_ly; /* left stick wins */
+                }
+                if (y < -CAT_AXIS_DEADZONE) {
+                    cat__set_axis_direction_y(-1, now);
+                } else if (y > CAT_AXIS_DEADZONE) {
+                    cat__set_axis_direction_y(1, now);
+                } else {
+                    cat__set_axis_direction_y(0, now);
                 }
             } else if (ev->caxis.axis == SDL_CONTROLLER_AXIS_TRIGGERLEFT) {
                 if (ev->caxis.value > CAT_AXIS_DEADZONE) {
@@ -3364,19 +3516,38 @@ static void cat__handle_sdl_event(SDL_Event *ev, uint32_t now) {
             }
             break;
         }
-        #endif
 
         case SDL_JOYHATMOTION: {
-            if (cat__g.controller) break; /* GameController handles d-pad */
+            if (cat__pad_find(ev->jhat.which) >= 0) break; /* GameController handles d-pad */
             cat__set_hat_state(ev->jhat.value, now);
             break;
         }
+
+        case SDL_JOYDEVICEADDED:
+            /* Controller-recognised pads are opened by CONTROLLERDEVICEADDED
+             * (fired right after); open everything else as a raw joystick so
+             * the existing platform map keeps working for it. */
+            if (!SDL_IsGameController(ev->jdevice.which)) {
+                cat__pad_add_index(ev->jdevice.which);
+            }
+            break;
+
+        case SDL_JOYDEVICEREMOVED:
+            /* Pads opened as controllers are closed by CONTROLLERDEVICEREMOVED. */
+            {
+                int pi = cat__pad_find(ev->jdevice.which);
+                if (pi >= 0 && !cat__g.pads[pi].gc) {
+                    cat__pad_remove(ev->jdevice.which);
+                }
+            }
+            break;
         #endif /* !PLATFORM_MY355 */
 
         /* --- Analog stick axis events (all device platforms) ---
            Thumbstick generates SDL_JOYAXISMOTION on all devices including
            MY355, so this must remain outside the MY355 exclusion guard. */
         case SDL_JOYAXISMOTION: {
+            if (cat__pad_find(ev->jaxis.which) >= 0) break; /* GameController handles axes */
             if (ev->jaxis.axis == 1) { /* Y axis (up/down) */
                 if (ev->jaxis.value < -CAT_AXIS_DEADZONE) {
                     cat__set_axis_direction_y(-1, now);
@@ -3696,6 +3867,11 @@ static uint32_t cat__next_wake_time(void) {
     return wake;
 }
 
+#if CAT_PLATFORM_IS_DEVICE
+static void cat__wake_rescan(void);
+static bool cat__wake_drain(int fd);
+#endif
+
 void cat_present(void) {
     /* When a view is being rendered into an offscreen target (e.g. a transition
        snapshot), the caller is capturing pixels, not drawing the live frame —
@@ -3714,22 +3890,45 @@ void cat_present(void) {
         }
     } else {
         /* Idle: sleep until input arrives or the next scheduled redraw.
-         * On device we block on the gamepad evdev fd so the kernel wakes us
-         * instantly on input -> ~zero idle CPU. SDL joysticks expose no fd for
-         * SDL to wait on, so SDL_WaitEventTimeout would busy-poll instead. */
+         * On device we block on the gamepad evdev fd set (internal pad +
+         * connected external controllers) so the kernel wakes us instantly on
+         * input -> ~zero idle CPU. SDL joysticks expose no fd for SDL to wait
+         * on, so SDL_WaitEventTimeout would busy-poll instead. */
         uint32_t wake = cat__next_wake_time();
         uint32_t now = SDL_GetTicks();
         int timeout = (wake > now) ? (int)(wake - now) : 0;
         if (timeout > 0) {
 #if CAT_PLATFORM_IS_DEVICE
-            if (cat__g.input_fd >= 0) {
-                struct pollfd pfd = { cat__g.input_fd, POLLIN, 0 };
-                if (poll(&pfd, 1, timeout) > 0 && (pfd.revents & POLLIN)) {
-                    /* Drain our wake-only fd; SDL reads the real events from its
-                     * own fd. Leaving these queued would keep poll() returning
-                     * immediately and burn CPU. */
-                    struct input_event evbuf[16];
-                    while (read(cat__g.input_fd, evbuf, sizeof(evbuf)) > 0) { }
+            /* Periodic wake-set rebind: cheap timestamp check; rescans run at
+             * most every CAT__WAKE_RESCAN_MS or right after a hotplug event. */
+            if (cat__g.wake_dirty ||
+                (int32_t)(SDL_GetTicks() - cat__g.wake_rescan_ms) >= 0) {
+                cat__wake_rescan();
+            }
+            if (cat__g.wake_fd_count > 0) {
+                uint32_t start = SDL_GetTicks();
+                int remaining = timeout;
+                while (remaining > 0) {
+                    struct pollfd pfds[CAT__WAKE_MAX_FDS];
+                    for (int i = 0; i < cat__g.wake_fd_count; i++) {
+                        pfds[i] = (struct pollfd){ cat__g.wake_fds[i], POLLIN, 0 };
+                    }
+                    int r = poll(pfds, cat__g.wake_fd_count, remaining);
+                    if (r <= 0) break; /* timeout or error */
+                    bool woke = false;
+                    for (int i = 0; i < cat__g.wake_fd_count; i++) {
+                        if (pfds[i].revents & POLLIN) {
+                            if (cat__wake_drain(pfds[i].fd)) woke = true;
+                        }
+                        if (pfds[i].revents & (POLLERR | POLLHUP | POLLNVAL)) {
+                            cat__g.wake_dirty = true; /* dead node: rebind next pass */
+                        }
+                    }
+                    /* Sub-deadzone analog noise is drained but not a wake: keep
+                     * blocking with the remaining budget so a noisy wireless
+                     * stick cannot prevent idle sleep. */
+                    if (woke) break;
+                    remaining = timeout - (int)(SDL_GetTicks() - start);
                 }
             } else {
                 SDL_Delay(timeout);
@@ -6741,38 +6940,159 @@ int           cat_get_screen_height(void) { return cat__g.screen_h; }
 /* ─── Initialization ─────────────────────────────────────────────────────── */
 
 #if CAT_PLATFORM_IS_DEVICE
-/* Scan /dev/input/event* for the gamepad (a device advertising BTN_GAMEPAD).
-   The returned fd is used purely as an idle wake source in cat_present(): the
-   kernel marks it readable the instant a button is pressed, so we can block in
-   poll() with ~zero CPU instead of busy-polling. SDL reads the actual events
-   from its own independent fd. Returns -1 if no gamepad device is found. */
-static int cat__open_gamepad_wake_fd(void) {
-    const char *override_path = getenv("CAT_INPUT_WAKE_EVENT");
-    if (override_path && override_path[0]) {
-        int fd = open(override_path, O_RDONLY | O_NONBLOCK);
-        if (fd >= 0) {
-            cat_log("Input: idle poll() wake device %s (override)", override_path);
-            return fd;
-        }
-        cat_log("Input: wake override failed for %s", override_path);
-    }
+/* Idle wake sources in cat_present(): a bounded collection of non-grabbing,
+   read-only evdev fds. The kernel marks them readable on input, so we can
+   block in poll() with ~zero CPU instead of busy-polling; SDL reads the real
+   events from its own independent fds. The set covers the (virtual) built-in
+   pad plus any external controllers and is rebound on hotplug. Paths come
+   from CAT_INPUT_WAKE_EVENTS (colon-separated list) and/or the legacy
+   single-path CAT_INPUT_WAKE_EVENT; with neither set, /dev/input/event* is
+   scanned for devices advertising BTN_GAMEPAD. */
 
+static bool cat__wake_have(const char *path) {
+    for (int i = 0; i < cat__g.wake_fd_count; i++) {
+        if (strcmp(cat__g.wake_paths[i], path) == 0) return true;
+    }
+    return false;
+}
+
+static void cat__wake_add(const char *path) {
+    if (!path || !path[0]) return;
+    if (cat__g.wake_fd_count >= CAT__WAKE_MAX_FDS) return;
+    if (cat__wake_have(path)) return;
+    int fd = open(path, O_RDONLY | O_NONBLOCK);
+    if (fd < 0) return;
+    int i = cat__g.wake_fd_count++;
+    cat__g.wake_fds[i] = fd;
+    snprintf(cat__g.wake_paths[i], sizeof(cat__g.wake_paths[i]), "%s", path);
+    cat_log("Input: idle poll() wake device %s", path);
+}
+
+/* Add every path in a colon-separated list (CAT_INPUT_WAKE_EVENTS format). */
+static void cat__wake_add_list(const char *list) {
+    if (!list || !list[0]) return;
+    char buf[CAT__WAKE_PATH_MAX * CAT__WAKE_MAX_FDS + 8];
+    snprintf(buf, sizeof(buf), "%s", list);
+    char *tok = strtok(buf, ":");
+    while (tok && cat__g.wake_fd_count < CAT__WAKE_MAX_FDS) {
+        cat__wake_add(tok);
+        tok = strtok(NULL, ":");
+    }
+}
+
+/* Auto-scan fallback: devices advertising BTN_GAMEPAD. */
+static void cat__wake_scan_gamepads(void) {
     unsigned char key_bits[(KEY_MAX + 1) / 8];
-    for (int i = 0; i < 16; i++) {
+    for (int i = 0; i < 16 && cat__g.wake_fd_count < CAT__WAKE_MAX_FDS; i++) {
         char path[32];
         snprintf(path, sizeof(path), "/dev/input/event%d", i);
+        if (cat__wake_have(path)) continue;
         int fd = open(path, O_RDONLY | O_NONBLOCK);
         if (fd < 0) continue;
         memset(key_bits, 0, sizeof(key_bits));
         if (ioctl(fd, EVIOCGBIT(EV_KEY, sizeof(key_bits)), key_bits) >= 0
             && (key_bits[BTN_GAMEPAD / 8] & (1 << (BTN_GAMEPAD % 8)))) {
+            int slot = cat__g.wake_fd_count++;
+            cat__g.wake_fds[slot] = fd;
+            snprintf(cat__g.wake_paths[slot], sizeof(cat__g.wake_paths[slot]), "%s", path);
             cat_log("Input: idle poll() wake device %s (BTN_GAMEPAD)", path);
-            return fd;
+        } else {
+            close(fd);
         }
-        close(fd);
     }
-    cat_log("Input: no gamepad evdev device for poll() wake; using timed sleep");
-    return -1;
+}
+
+static void cat__wake_close_all(void) {
+    for (int i = 0; i < cat__g.wake_fd_count; i++) {
+        if (cat__g.wake_fds[i] >= 0) close(cat__g.wake_fds[i]);
+        cat__g.wake_fds[i] = -1;
+        cat__g.wake_paths[i][0] = '\0';
+    }
+    cat__g.wake_fd_count = 0;
+}
+
+static bool cat__wake_has_overrides(void) {
+    const char *multi  = getenv("CAT_INPUT_WAKE_EVENTS");
+    const char *single = getenv("CAT_INPUT_WAKE_EVENT");
+    return (multi && multi[0]) || (single && single[0]);
+}
+
+static void cat__wake_init(void) {
+    cat__wake_close_all();
+    cat__wake_add_list(getenv("CAT_INPUT_WAKE_EVENTS"));
+    cat__wake_add(getenv("CAT_INPUT_WAKE_EVENT"));
+    if (cat__g.wake_fd_count == 0) {
+        cat__wake_scan_gamepads();
+    }
+    if (cat__g.wake_fd_count == 0) {
+        cat_log("Input: no gamepad evdev device for poll() wake; using timed sleep");
+    }
+    cat__g.wake_rescan_ms = SDL_GetTicks() + CAT__WAKE_RESCAN_MS;
+    cat__g.wake_dirty = false;
+}
+
+/* Light periodic rebind: close descriptors whose device node vanished
+   (disconnect), reopen paths that reappeared (reconnect), and — only in
+   auto-scan mode — pick up newly connected gamepads. */
+static void cat__wake_rescan(void) {
+    cat__g.wake_rescan_ms = SDL_GetTicks() + CAT__WAKE_RESCAN_MS;
+    cat__g.wake_dirty = false;
+
+    for (int i = 0; i < cat__g.wake_fd_count; i++) {
+        if (access(cat__g.wake_paths[i], F_OK) != 0) {
+            cat_log("Input: wake device %s disconnected", cat__g.wake_paths[i]);
+            close(cat__g.wake_fds[i]);
+            cat__g.wake_fds[i] = -1;
+        }
+    }
+    /* Compact */
+    int out = 0;
+    for (int i = 0; i < cat__g.wake_fd_count; i++) {
+        if (cat__g.wake_fds[i] < 0) continue;
+        if (out != i) {
+            cat__g.wake_fds[out] = cat__g.wake_fds[i];
+            memcpy(cat__g.wake_paths[out], cat__g.wake_paths[i], sizeof(cat__g.wake_paths[out]));
+        }
+        out++;
+    }
+    cat__g.wake_fd_count = out;
+
+    bool overrides = cat__wake_has_overrides();
+    if (overrides) {
+        cat__wake_add_list(getenv("CAT_INPUT_WAKE_EVENTS"));
+        cat__wake_add(getenv("CAT_INPUT_WAKE_EVENT"));
+    } else {
+        cat__wake_scan_gamepads();
+    }
+}
+
+/* Does this evdev event warrant a wake? Buttons and hats always; analog axes
+   only past CAT_AXIS_DEADZONE so idle stick noise (wireless pads) never
+   defeats sleep. Willing to wake on BTN_MODE (Guide) comes through EV_KEY. */
+static bool cat__wake_event_is_activity(const struct input_event *e) {
+    if (e->type == EV_KEY) return true;
+    if (e->type == EV_ABS) {
+        if (e->code >= ABS_HAT0X && e->code <= ABS_HAT3Y) return true;
+        if (e->value > CAT_AXIS_DEADZONE || e->value < -CAT_AXIS_DEADZONE) return true;
+    }
+    return false;
+}
+
+/* Drain a wake-only fd; returns true if drained events include a real wake
+   reason (leaving them queued would keep poll() returning immediately). */
+static bool cat__wake_drain(int fd) {
+    bool activity = false;
+    struct input_event evbuf[16];
+    for (;;) {
+        ssize_t n = read(fd, evbuf, sizeof(evbuf));
+        if (n < (ssize_t)sizeof(struct input_event)) break;
+        int count = (int)(n / sizeof(struct input_event));
+        for (int i = 0; i < count; i++) {
+            if (cat__wake_event_is_activity(&evbuf[i])) activity = true;
+        }
+        if ((size_t)n < sizeof(evbuf)) break;
+    }
+    return activity;
 }
 #endif
 
@@ -6786,55 +7106,29 @@ static void cat__input_backend_init(void) {
     }
     cat__g.input_backend_ready = true;
 
-    uint32_t joy_flags = SDL_INIT_JOYSTICK;
-    #if !CAT_PLATFORM_IS_DEVICE
-    joy_flags |= SDL_INIT_GAMECONTROLLER;
-    #endif
-    if (SDL_InitSubSystem(joy_flags) < 0) {
+    if (SDL_InitSubSystem(SDL_INIT_JOYSTICK | SDL_INIT_GAMECONTROLLER) < 0) {
         cat_log("ERROR: SDL_InitSubSystem(joystick) failed: %s", SDL_GetError());
         return;
     }
 
-    /* Open input devices.
-     * On device we prefer raw joystick mapping because SDL GameController
-     * DB mappings can remap face buttons in ways that differ from the device's
-     * expected A/B layout on TrimUI hardware.
-     * On device, ALL joysticks are opened so that
-     * SDL receives keyboard/power events from every registered input device. */
+    /* Open all input devices. SDL-recognised controllers are opened via
+     * SDL_GameControllerOpen and use the canonical mapping; everything else
+     * (notably the virtual Loong pad on MLP1) is opened raw and keeps the
+     * existing platform mapping. cat__pad_add_index() handles both. Hotplug is
+     * handled at runtime via SDL_(CONTROLLER|JOY)DEVICEADDED/REMOVED. */
     int num_joy = SDL_NumJoysticks();
-    #if CAT_PLATFORM_IS_DEVICE
+    if (num_joy > CAT__MAX_PADS) num_joy = CAT__MAX_PADS;
     for (int i = 0; i < num_joy; i++) {
-        SDL_Joystick *joy = SDL_JoystickOpen(i);
-        if (joy) {
-            cat_log("Joystick %d opened: %s", i, SDL_JoystickName(joy));
-            if (!cat__g.joystick) cat__g.joystick = joy; /* keep first for backward compat */
-        }
+        cat__pad_add_index(i);
     }
-    #else
-    for (int i = 0; i < num_joy; i++) {
-        if (SDL_IsGameController(i)) {
-            cat__g.controller = SDL_GameControllerOpen(i);
-            if (cat__g.controller) {
-                cat_log("Game controller opened: %s", SDL_GameControllerName(cat__g.controller));
-                /* Also grab underlying joystick for hat/axis fallback */
-                cat__g.joystick = SDL_GameControllerGetJoystick(cat__g.controller);
-                break;
-            }
-        }
-        cat__g.joystick = SDL_JoystickOpen(i);
-        if (cat__g.joystick) {
-            cat_log("Joystick opened: %s", SDL_JoystickName(cat__g.joystick));
-            break;
-        }
-    }
-    #endif
-    cat_log("Input backend: %s",
-           cat__g.controller ? "gamecontroller" :
+    cat_log("Input backend: %d device(s) tracked (%s)",
+           cat__g.pad_count,
+           cat__g.controller ? "gamecontroller+joystick" :
            (cat__g.joystick ? "joystick" : "none"));
 
     #if CAT_PLATFORM_IS_DEVICE
-    /* Open a dedicated evdev fd used only to wake from idle poll() in cat_present(). */
-    cat__g.input_fd = cat__open_gamepad_wake_fd();
+    /* Open the evdev fd set used only to wake from idle poll() in cat_present(). */
+    cat__wake_init();
     #endif
 }
 
@@ -6852,7 +7146,8 @@ int cat_init(cat_config *cfg) {
     }
 
     memset(&cat__g, 0, sizeof(cat__g));
-    cat__g.input_fd = -1;
+    for (int i = 0; i < CAT__WAKE_MAX_FDS; i++) cat__g.wake_fds[i] = -1;
+    for (int i = 0; i < CAT__MAX_PADS; i++) cat__g.pads[i].id = -1;
     #if CAT_PLATFORM_IS_DEVICE
     cat__g.power_fd = -1;
     #endif
@@ -7410,21 +7705,23 @@ void cat_quit(void) {
         cat__g.symbol_font_small = NULL;
     }
 
-    /* Close idle-wake evdev fd */
-    if (cat__g.input_fd >= 0) {
-        close(cat__g.input_fd);
-        cat__g.input_fd = -1;
-    }
+    #if CAT_PLATFORM_IS_DEVICE
+    /* Close idle-wake evdev fds */
+    cat__wake_close_all();
+    #endif
 
-    /* Close controller / joystick */
-    if (cat__g.controller) {
-        SDL_GameControllerClose(cat__g.controller);
-        cat__g.controller = NULL;
-        cat__g.joystick = NULL; /* owned by controller */
-    } else if (cat__g.joystick) {
-        SDL_JoystickClose(cat__g.joystick);
-        cat__g.joystick = NULL;
+    /* Close all tracked controllers / joysticks */
+    for (int i = 0; i < CAT__MAX_PADS; i++) {
+        if (cat__g.pads[i].id == -1) continue;
+        if (cat__g.pads[i].gc) SDL_GameControllerClose(cat__g.pads[i].gc);
+        else if (cat__g.pads[i].joy) SDL_JoystickClose(cat__g.pads[i].joy);
+        cat__g.pads[i].id = -1;
+        cat__g.pads[i].gc = NULL;
+        cat__g.pads[i].joy = NULL;
     }
+    cat__g.pad_count = 0;
+    cat__g.controller = NULL;
+    cat__g.joystick = NULL;
 
     /* Destroy renderer and window */
     if (cat__g.renderer) {
