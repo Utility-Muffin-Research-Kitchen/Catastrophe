@@ -41,5 +41,5 @@
   "menu": {
     "background_color": "#000000"
   },
-  "cjk_font": { "path": "fonts/SourceHanSansCN/SourceHanSansCN-Heavy.otf", "size": 36 }
+  "cjk_font": { "path": "fonts/SourceHanSansCN/SourceHanSansCN-Regular.otf", "size": 36 }
 }
