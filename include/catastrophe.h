@@ -4079,8 +4079,25 @@ void cat_present(void) {
                     for (int i = 0; i < cat__g.wake_fd_count; i++) {
                         pfds[i] = (struct pollfd){ cat__g.wake_fds[i], POLLIN, 0 };
                     }
-                    int r = poll(pfds, cat__g.wake_fd_count, remaining);
-                    if (r <= 0) break; /* timeout or error */
+                    /* Never sleep past a rebind opportunity. A controller that
+                     * connects while we are blocked here is not in this fd set,
+                     * so nothing it sends can wake us -- and idle sleep runs to
+                     * the next minute boundary. Without this cap a pad that
+                     * reconnects mid-session looks dead for up to a minute,
+                     * while an emulator that never idles keeps responding to
+                     * it. Waking every few seconds to re-scan is far cheaper
+                     * than that. */
+                    int slice = remaining < CAT__WAKE_RESCAN_MS
+                                    ? remaining : CAT__WAKE_RESCAN_MS;
+                    int r = poll(pfds, cat__g.wake_fd_count, slice);
+                    if (r < 0) break; /* error */
+                    if (r == 0) {
+                        /* Slice expired with no input: pick up any device that
+                         * appeared, then wait out the rest of the budget. */
+                        cat__wake_rescan();
+                        remaining = timeout - (int)(SDL_GetTicks() - start);
+                        continue;
+                    }
                     bool woke = false;
                     for (int i = 0; i < cat__g.wake_fd_count; i++) {
                         if (pfds[i].revents & POLLIN) {
@@ -7195,9 +7212,9 @@ static void cat__wake_init(void) {
     cat__wake_close_all();
     cat__wake_add_list(getenv("CAT_INPUT_WAKE_EVENTS"));
     cat__wake_add(getenv("CAT_INPUT_WAKE_EVENT"));
-    if (cat__g.wake_fd_count == 0) {
-        cat__wake_scan_gamepads();
-    }
+    /* Same reasoning as the rescan: a pad connected before this process
+       started can already be missing from an inherited list. */
+    cat__wake_scan_gamepads();
     if (cat__g.wake_fd_count == 0) {
         cat_log("Input: no gamepad evdev device for poll() wake; using timed sleep");
     }
@@ -7231,13 +7248,19 @@ static void cat__wake_rescan(void) {
     }
     cat__g.wake_fd_count = out;
 
-    bool overrides = cat__wake_has_overrides();
-    if (overrides) {
+    if (cat__wake_has_overrides()) {
         cat__wake_add_list(getenv("CAT_INPUT_WAKE_EVENTS"));
         cat__wake_add(getenv("CAT_INPUT_WAKE_EVENT"));
-    } else {
-        cat__wake_scan_gamepads();
     }
+    /* Always sweep for gamepads too, even when the environment named a list.
+     * That list is fixed when the process starts, so a controller paired
+     * afterwards is missing from it forever -- the host republishes the
+     * variable, but only new children ever read it. Left to the environment
+     * alone, such a pad drives the UI while being absent from the fd set we
+     * sleep on, so every press waits for an unrelated wake and the UI feels a
+     * beat behind. The named paths are added first and keep their priority;
+     * this only fills the slots they left. */
+    cat__wake_scan_gamepads();
 }
 
 /* Does this evdev event warrant a wake? Buttons and hats always; analog axes
