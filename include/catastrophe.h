@@ -2906,6 +2906,13 @@ static TTF_Font *cat__cjk_font_for(TTF_Font *base) {
         if (size < 8) size = 8;
         cat__g.cjk_fonts[tier] = cat__open_font(path, size);
         if (!cat__g.cjk_fonts[tier]) { cat__g.cjk_font_missing = true; return base; }
+        /* Undo the synthetic bold every other font gets. Emboldening is an
+           algorithmic smear, and a Han glyph already spends its em box on
+           strokes -- thickening them closes the counters and the character
+           turns into a blob at the sizes this runs at. Latin has room to
+           absorb it; CJK does not. Native speakers reported the result reading
+           too heavy, which is the same finding from the other direction. */
+        TTF_SetFontStyle(cat__g.cjk_fonts[tier], TTF_STYLE_NORMAL);
     }
     return cat__g.cjk_fonts[tier];
 }
