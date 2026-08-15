@@ -1446,6 +1446,7 @@ int cat_options_list(cat_options_list_opts *opts, cat_options_list_result *resul
             result->focused_index = cursor;
             result->action = CAT_ACTION_REFRESH;
             running = false;
+            cat_request_frame();
         }
 
         /* Scroll */
