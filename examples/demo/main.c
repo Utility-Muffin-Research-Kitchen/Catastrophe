@@ -796,23 +796,25 @@ static int demo_options_list_refresh_smoke(void) {
         .item_count = (int)(sizeof(items) / sizeof(items[0])),
         .initial_selected_index = 20,
         .visible_start_index = 18,
-        .refresh_interval_ms = 25,
+        .refresh_interval_ms = 250,
     };
-    cat_options_list_result result = {0};
-    uint32_t started = SDL_GetTicks();
-    int rc = cat_options_list(&opts, &result);
-    uint32_t elapsed = SDL_GetTicks() - started;
-    if (rc != CAT_OK || result.action != CAT_ACTION_REFRESH ||
-        result.focused_index != 20 || result.visible_start_index != 18 ||
-        elapsed < 25 || elapsed > 1000) {
-        fprintf(stderr,
-                "options refresh smoke failed: rc=%d action=%d focus=%d scroll=%d elapsed=%u\n",
-                rc, result.action, result.focused_index,
-                result.visible_start_index, elapsed);
-        return 1;
+    for (int pass = 1; pass <= 2; pass++) {
+        cat_options_list_result result = {0};
+        uint32_t started = SDL_GetTicks();
+        int rc = cat_options_list(&opts, &result);
+        uint32_t elapsed = SDL_GetTicks() - started;
+        if (rc != CAT_OK || result.action != CAT_ACTION_REFRESH ||
+            result.focused_index != 20 || result.visible_start_index != 18 ||
+            elapsed < 250 || elapsed > 1000) {
+            fprintf(stderr,
+                    "options refresh smoke %d/2 failed: rc=%d action=%d focus=%d scroll=%d elapsed=%u\n",
+                    pass, rc, result.action, result.focused_index,
+                    result.visible_start_index, elapsed);
+            return 1;
+        }
+        printf("PASS options refresh %d/2: focus=%d scroll=%d elapsed=%u ms\n",
+               pass, result.focused_index, result.visible_start_index, elapsed);
     }
-    printf("PASS options refresh: focus=%d scroll=%d elapsed=%u ms\n",
-           result.focused_index, result.visible_start_index, elapsed);
     return 0;
 }
 
