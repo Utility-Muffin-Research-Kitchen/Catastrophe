@@ -689,7 +689,9 @@ from input, and calls `cat_draw_list_pane()` during render.
 - Caller-owned cursor and scroll state
 - Wrapping cursor movement via `cat_list_state_move()`
 - Page, absolute, and first-letter jumps
-- Stateless row rendering callback
+- Continuous content motion for move/page input
+- Optional layered focus motion beneath fixed row labels
+- Caller-supplied row rendering callback
 - Automatic scrollbar when `item_count > visible_rows`
 
 **Usage**:

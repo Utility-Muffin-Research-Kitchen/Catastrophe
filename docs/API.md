@@ -64,8 +64,8 @@ This reference documents the current Catastrophe headers in this repository.
 | `CAT_PLATFORM_IS_DEVICE` | `0` or `1` | Whether building for a real device |
 | `CAT_ENABLE_CURL` | build define | Enables `cat_download_manager()` implementation |
 | `CAT_INPUT_DEBOUNCE` | `20` | Input debounce delay (ms) |
-| `CAT_INPUT_REPEAT_DELAY` | `300` | Initial hold delay (ms) |
-| `CAT_INPUT_REPEAT_RATE` | `100` | Repeat rate (ms) |
+| `CAT_INPUT_REPEAT_DELAY` | `225` | Initial hold delay (ms) |
+| `CAT_INPUT_REPEAT_RATE` | `75` | Repeat rate (ms) |
 | `CAT_AXIS_DEADZONE` | `16000` / `20000` on `my355` | Joystick axis dead zone |
 | `CAT_TEXT_SCROLL_SPEED` | `1` | Text scroll speed (pixels per tick) |
 | `CAT_TEXT_SCROLL_PAUSE_MS` | `1000` | Pause at scroll endpoints (ms) |
@@ -1698,10 +1698,17 @@ typedef struct {
     int cursor;
     int scroll_offset;
     int visible_rows;
+    float anim_from_cursor;
+    float anim_from_scroll;
+    uint32_t anim_start_ms;
+    bool anim_active;
 } cat_list_state;
 
 typedef void (*cat_list_item_draw_fn)(int idx, int x, int y, int w, int h,
                                       bool selected, void *user);
+typedef void (*cat_list_layered_item_draw_fn)(int idx, int x, int y, int w, int h,
+                                              float focus, void *user);
+typedef void (*cat_list_focus_draw_fn)(int x, int y, int w, int h, void *user);
 
 void cat_list_state_init(cat_list_state *s, int visible_rows);
 void cat_list_state_move(cat_list_state *s, int delta, int count);
@@ -1714,10 +1721,23 @@ void cat_draw_list_pane(int x, int y, int w, int h,
                         int item_count, const cat_list_state *state,
                         int item_height, cat_list_item_draw_fn draw_item,
                         void *user);
+void cat_draw_list_pane_layered(int x, int y, int w, int h,
+                                int item_count, const cat_list_state *state,
+                                int item_height,
+                                cat_list_focus_draw_fn draw_focus,
+                                cat_list_layered_item_draw_fn draw_item,
+                                void *user);
 ```
 
 `cat_list_state_move()` wraps at the top/bottom. Page and direct jumps clamp.
-`cat_draw_list_pane()` draws only visible rows and adds a scrollbar when needed.
+Move and page operations update the logical cursor immediately while the draw
+helpers ease presentation between frames. `cat_draw_list_pane()` animates
+content scrolling while preserving its original single-pass callback behavior.
+`cat_draw_list_pane_layered()` also moves an independently drawn focus beneath
+fixed row content; its item callback receives a continuous `focus` weight from
+0 to 1 so content styling can follow the highlight. Direct and first-letter
+jumps snap to their destination. Both helpers clip to the pane, draw only
+visible rows, and add a scrollbar when needed.
 
 ### Scroll View
 

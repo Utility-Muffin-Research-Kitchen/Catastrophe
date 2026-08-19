@@ -572,10 +572,19 @@ typedef struct {
     int cursor;
     int scroll_offset;
     int visible_rows;
+    /* Presentation state. Logical input updates immediately; layered renderers
+       ease the focus independently from fixed row content. */
+    float    anim_from_cursor;
+    float    anim_from_scroll;
+    uint32_t anim_start_ms;
+    bool     anim_active;
 } cat_list_state;
 
 typedef void (*cat_list_item_draw_fn)(int idx, int x, int y, int w, int h,
                                        bool selected, void *user);
+typedef void (*cat_list_layered_item_draw_fn)(int idx, int x, int y, int w, int h,
+                                               float focus, void *user);
+typedef void (*cat_list_focus_draw_fn)(int x, int y, int w, int h, void *user);
 
 void cat_list_state_init(cat_list_state *s, int visible_rows);
 /* Moves the cursor by delta, wrapping around the ends (top<->bottom). */
@@ -596,6 +605,16 @@ void cat_draw_list_pane(int x, int y, int w, int h,
                          int item_count, const cat_list_state *state,
                          int item_height, cat_list_item_draw_fn draw_item,
                          void *user);
+
+/* Layered variant for a smoothly moving focus with fixed row content. The focus
+ * callback paints only the highlight background; item callbacks paint content
+ * and receive a 0..1 focus weight that follows the moving highlight. */
+void cat_draw_list_pane_layered(int x, int y, int w, int h,
+                                int item_count, const cat_list_state *state,
+                                int item_height,
+                                cat_list_focus_draw_fn draw_focus,
+                                cat_list_layered_item_draw_fn draw_item,
+                                void *user);
 
 /* ═══════════════════════════════════════════════════════════════════════════
  * Scroll View
@@ -671,6 +690,7 @@ void cat_draw_scroll_view(int x, int y, int w, int h, int content_height,
 /* Duration of the selection pill slide animation in ms (~3 frames at 60fps) */
 #define CAT__PILL_ANIM_MS 50.0f     /* ~3 frames at 60fps */
 #define CAT__SCROLL_ANIM_MS 80.0f  /* ~5 frames at 60fps — content scroll */
+#define CAT__LIST_PANE_ANIM_MS 80.0f /* slightly overlaps 75ms repeat for continuous motion */
 
 cat_list_opts cat_list_default_opts(const char *title, cat_list_item *items, int count) {
     cat_list_opts opts = {0};
@@ -1645,6 +1665,141 @@ int cat_options_list(cat_options_list_opts *opts, cat_options_list_result *resul
 #define CAT__KB_KEY_SPACE      (-5)
 
 #define CAT__KB_SHIFT_LABEL "\xe2\x87\xa7" /* ⇧ */
+#define CAT__KB_FOCUS_ANIM_MS 80.0f
+
+typedef struct {
+    int id;
+    int x, y, w, h;
+    int radius;
+    const char *label;
+    TTF_Font *font;
+    bool space_indicator;
+} cat__kb_key_visual;
+
+typedef struct {
+    int target_id;
+    float from_x, from_y, from_w, from_h;
+    float target_x, target_y, target_w, target_h;
+    float current_x, current_y, current_w, current_h;
+    uint32_t start_ms;
+    bool initialized;
+    bool active;
+} cat__kb_focus_motion;
+
+static void cat__kb_focus_position(cat__kb_focus_motion *motion, uint32_t now,
+                                   float *x, float *y, float *w, float *h) {
+    float t = 1.0f;
+    if (motion->active) {
+        t = cat__clampf((float)(now - motion->start_ms) /
+                        CAT__KB_FOCUS_ANIM_MS, 0.0f, 1.0f);
+        float inv = 1.0f - t;
+        t = 1.0f - inv * inv * inv;
+    }
+    *x = cat__lerpf(motion->from_x, motion->target_x, t);
+    *y = cat__lerpf(motion->from_y, motion->target_y, t);
+    *w = cat__lerpf(motion->from_w, motion->target_w, t);
+    *h = cat__lerpf(motion->from_h, motion->target_h, t);
+    if (t >= 1.0f) motion->active = false;
+}
+
+static void cat__kb_draw_focus(cat__kb_focus_motion *motion,
+                               const cat__kb_key_visual *target,
+                               cat_draw_color bg) {
+    if (!motion || !target) return;
+
+    uint32_t now = SDL_GetTicks();
+    if (!motion->initialized) {
+        motion->target_id = target->id;
+        motion->from_x = motion->target_x = (float)target->x;
+        motion->from_y = motion->target_y = (float)target->y;
+        motion->from_w = motion->target_w = (float)target->w;
+        motion->from_h = motion->target_h = (float)target->h;
+        motion->initialized = true;
+    } else if (motion->target_id != target->id ||
+               motion->target_x != (float)target->x ||
+               motion->target_y != (float)target->y ||
+               motion->target_w != (float)target->w ||
+               motion->target_h != (float)target->h) {
+        float x, y, w, h;
+        cat__kb_focus_position(motion, now, &x, &y, &w, &h);
+        motion->from_x = x;
+        motion->from_y = y;
+        motion->from_w = w;
+        motion->from_h = h;
+        motion->target_x = (float)target->x;
+        motion->target_y = (float)target->y;
+        motion->target_w = (float)target->w;
+        motion->target_h = (float)target->h;
+        motion->target_id = target->id;
+        motion->start_ms = now;
+        motion->active = true;
+    }
+
+    float fx, fy, fw, fh;
+    cat__kb_focus_position(motion, now, &fx, &fy, &fw, &fh);
+    motion->current_x = fx;
+    motion->current_y = fy;
+    motion->current_w = fw;
+    motion->current_h = fh;
+    if (motion->active) cat_request_frame();
+
+    int x = (int)(fx + 0.5f);
+    int y = (int)(fy + 0.5f);
+    int w = (int)(fw + 0.5f);
+    int h = (int)(fh + 0.5f);
+    cat_draw_rounded_rect(x, y, w, h, target->radius, bg);
+}
+
+static void cat__kb_draw_keys(const cat__kb_key_visual *keys, int count,
+                              int selected_id, cat__kb_focus_motion *motion,
+                              cat_draw_color normal_bg, cat_draw_color focus_bg,
+                              cat_draw_color normal_fg, cat_draw_color focus_fg) {
+    const cat__kb_key_visual *target = NULL;
+    for (int i = 0; i < count; i++) {
+        const cat__kb_key_visual *key = &keys[i];
+        cat_draw_rounded_rect(key->x, key->y, key->w, key->h,
+                              key->radius, normal_bg);
+        if (key->id == selected_id) target = key;
+    }
+
+    /* The moving layer contains only the background. Labels remain attached to
+       their keys and are painted afterward, so focus motion can never make two
+       keys appear to exchange content. */
+    if (target) cat__kb_draw_focus(motion, target, focus_bg);
+
+    for (int i = 0; i < count; i++) {
+        const cat__kb_key_visual *key = &keys[i];
+        float focus = 0.0f;
+        if (target) {
+            float focus_cx = motion->current_x + motion->current_w * 0.5f;
+            float focus_cy = motion->current_y + motion->current_h * 0.5f;
+            float key_cx = (float)key->x + key->w * 0.5f;
+            float key_cy = (float)key->y + key->h * 0.5f;
+            float span_x = (motion->current_w + key->w) * 0.5f;
+            float span_y = (motion->current_h + key->h) * 0.5f;
+            if (span_x < 1.0f) span_x = 1.0f;
+            if (span_y < 1.0f) span_y = 1.0f;
+            float dx = (focus_cx - key_cx) / span_x;
+            float dy = (focus_cy - key_cy) / span_y;
+            focus = cat__clampf(1.0f - sqrtf(dx * dx + dy * dy), 0.0f, 1.0f);
+            focus = focus * focus * (3.0f - 2.0f * focus);
+        }
+        cat_draw_color fg = cat_draw_color_lerp(normal_fg, focus_fg, focus);
+        if (key->space_indicator) {
+            int line_w = key->w / 3;
+            int line_h = CAT_S(3);
+            cat_draw_rect(key->x + (key->w - line_w) / 2,
+                          key->y + (key->h - line_h) / 2,
+                          line_w, line_h, fg);
+        } else if (key->label && key->font) {
+            int tw = cat_measure_text(key->font, key->label);
+            int th = TTF_FontHeight(key->font);
+            cat_draw_text(key->font, key->label,
+                          key->x + (key->w - tw) / 2,
+                          key->y + (key->h - th) / 2, fg);
+        }
+    }
+}
 
 /* 5-row general layout — 12-column virtual grid.
  * Row 0: 1-0 keys (10) + backspace (2 cols)
@@ -1977,6 +2132,7 @@ static int cat__keyboard_ex_impl(const char *initial_text, const char *help_text
         bool running = true;
         uint32_t caret_blink = SDL_GetTicks();
         bool caret_visible = true;
+        cat__kb_focus_motion focus_motion = {0};
 
         while (running) {
             uint32_t now = SDL_GetTicks();
@@ -2021,6 +2177,8 @@ static int cat__keyboard_ex_impl(const char *initial_text, const char *help_text
             cat__kb_draw_input_text(text_font, result, text_cursor, &text_scroll,
                                    input_x, input_y, input_w, input_h,
                                    caret_visible, theme->highlighted_text);
+            cat__kb_key_visual keys[CAT__KB_COLS_NUMERIC * CAT__KB_ROWS_NUMERIC];
+            int key_count = 0;
             for (int row = 0; row < kb_rows; row++) {
                 for (int col = 0; col < kb_cols; col++) {
                     int ki = row * kb_cols + col;
@@ -2028,13 +2186,16 @@ static int cat__keyboard_ex_impl(const char *initial_text, const char *help_text
                     if (!key) continue;
                     int kx = grid_x + col * (key_w + key_gap);
                     int ky = grid_y + row * (key_h + key_gap);
-                    bool sel = (row == cursor_y && col == cursor_x);
-                    cat_draw_rounded_rect(kx, ky, key_w, key_h, key_r, sel ? theme->highlight : theme->accent);
-                    int tw = cat_measure_text(key_font, key);
-                    cat_draw_text(key_font, key, kx + (key_w - tw)/2, ky + (key_h - TTF_FontHeight(key_font))/2,
-                                 sel ? theme->highlighted_text : theme->hint);
+                    keys[key_count++] = (cat__kb_key_visual){
+                        .id = ki, .x = kx, .y = ky, .w = key_w, .h = key_h,
+                        .radius = key_r, .label = key, .font = key_font,
+                    };
                 }
             }
+            cat__kb_draw_keys(keys, key_count,
+                              cursor_y * kb_cols + cursor_x, &focus_motion,
+                              theme->accent, theme->highlight,
+                              theme->hint, theme->highlighted_text);
             if (!backdrop) cat__kb_draw_footer();
             cat_present();
 
@@ -2074,6 +2235,7 @@ static int cat__keyboard_ex_impl(const char *initial_text, const char *help_text
     int text_cursor = (int)strlen(result->text);
     int text_scroll = 0;
     bool running = true;
+    cat__kb_focus_motion focus_motion = {0};
 
     uint32_t caret_blink = SDL_GetTicks();
     bool caret_visible = true;
@@ -2237,18 +2399,18 @@ static int cat__keyboard_ex_impl(const char *initial_text, const char *help_text
         cat_draw_color key_bg_sel     = theme->highlight;
         cat_draw_color key_fg_normal  = theme->hint;
         cat_draw_color key_fg_sel     = theme->highlighted_text;
+        cat__kb_key_visual keys[48];
+        int key_count = 0;
 
-        /* Helper macro: draw a single key rectangle with text */
-        #define CAT__KB_DRAW_KEY(x, y, w, h, label, is_sel, font_to_use) do { \
-            cat_draw_color _bg = (is_sel) ? key_bg_sel : key_bg_normal; \
-            cat_draw_color _fg = (is_sel) ? key_fg_sel : key_fg_normal; \
-            cat_draw_rounded_rect((x), (y), (w), (h), key_r, _bg); \
-            if (label) { \
-                int _tw = cat_measure_text((font_to_use), (label)); \
-                int _th = TTF_FontHeight((font_to_use)); \
-                cat_draw_text((font_to_use), (label), \
-                    (x) + ((w) - _tw) / 2, (y) + ((h) - _th) / 2, _fg); \
-            } \
+        /* Collect the layout so backgrounds, moving focus, and fixed labels can
+           be painted in separate layers. */
+        #define CAT__KB_DRAW_KEY(px, py, pw, ph, plabel, is_sel, font_to_use) do { \
+            int _id = (is_sel) ? cursor_row * 32 + cursor_col : -key_count - 1; \
+            keys[key_count++] = (cat__kb_key_visual){ \
+                .id = _id, \
+                .x = (px), .y = (py), .w = (pw), .h = (ph), \
+                .radius = key_r, .label = (plabel), .font = (font_to_use), \
+            }; \
         } while(0)
 
         /* Row 0: numbers + backspace */
@@ -2331,18 +2493,18 @@ static int cat__keyboard_ex_impl(const char *initial_text, const char *help_text
             int space_w = key_w * 8 + key_spacing * 7;
             int sx = (screen_w - space_w) / 2;
             bool sel = (cursor_row == 4);
-            cat_draw_color bg = sel ? key_bg_sel : key_bg_normal;
-            cat_draw_rounded_rect(sx, row_y, space_w, key_h, key_r, bg);
-            /* Space indicator: centered line */
-            int line_w = space_w / 3;
-            int line_h = CAT_S(3);
-            int line_x = sx + (space_w - line_w) / 2;
-            int line_y = row_y + (key_h - line_h) / 2;
-            cat_draw_color line_c = sel ? key_fg_sel : key_fg_normal;
-            cat_draw_rect(line_x, line_y, line_w, line_h, line_c);
+            int id = sel ? cursor_row * 32 + cursor_col : -key_count - 1;
+            keys[key_count++] = (cat__kb_key_visual){
+                .id = id, .x = sx, .y = row_y, .w = space_w, .h = key_h,
+                .radius = key_r, .space_indicator = true,
+            };
         }
 
         #undef CAT__KB_DRAW_KEY
+
+        cat__kb_draw_keys(keys, key_count, cursor_row * 32 + cursor_col,
+                          &focus_motion, key_bg_normal, key_bg_sel,
+                          key_fg_normal, key_fg_sel);
 
         if (!backdrop) cat__kb_draw_footer();
 
@@ -2438,6 +2600,7 @@ int cat_url_keyboard(const char *initial_text, const char *help_text,
     bool running = true;
     uint32_t caret_blink = SDL_GetTicks();
     bool caret_visible = true;
+    cat__kb_focus_motion focus_motion = {0};
 
     /* Row max columns for navigation */
     /* shortcut rows: shortcuts_per_row-1 (+ backspace on last shortcut row) */
@@ -2610,16 +2773,16 @@ int cat_url_keyboard(const char *initial_text, const char *help_text,
         cat_draw_color key_bg_sel    = theme->highlight;
         cat_draw_color key_fg_normal = theme->hint;
         cat_draw_color key_fg_sel    = theme->highlighted_text;
+        cat__kb_key_visual keys[64];
+        int key_count = 0;
 
-        #define CAT__KB_DRAW_KEY2(x, y, w, h, label, is_sel, fnt) do { \
-            cat_draw_color _bg = (is_sel) ? key_bg_sel : key_bg_normal; \
-            cat_draw_color _fg = (is_sel) ? key_fg_sel : key_fg_normal; \
-            cat_draw_rounded_rect((x), (y), (w), (h), key_r, _bg); \
-            if (label) { \
-                int _tw = cat_measure_text((fnt), (label)); \
-                int _th = TTF_FontHeight((fnt)); \
-                cat_draw_text((fnt), (label), (x)+((w)-_tw)/2, (y)+((h)-_th)/2, _fg); \
-            } \
+        #define CAT__KB_DRAW_KEY2(px, py, pw, ph, plabel, is_sel, fnt) do { \
+            int _id = (is_sel) ? cursor_row * 32 + cursor_col : -key_count - 1; \
+            keys[key_count++] = (cat__kb_key_visual){ \
+                .id = _id, \
+                .x = (px), .y = (py), .w = (pw), .h = (ph), \
+                .radius = key_r, .label = (plabel), .font = (fnt), \
+            }; \
         } while(0)
 
         int ry = grid_y;
@@ -2725,6 +2888,10 @@ int cat_url_keyboard(const char *initial_text, const char *help_text,
         }
 
         #undef CAT__KB_DRAW_KEY2
+
+        cat__kb_draw_keys(keys, key_count, cursor_row * 32 + cursor_col,
+                          &focus_motion, key_bg_normal, key_bg_sel,
+                          key_fg_normal, key_fg_sel);
 
         cat__kb_draw_footer();
 
@@ -5771,9 +5938,47 @@ void cat_ui_feedback_emit(cat_ui_feedback what) {
 
 void cat_list_state_init(cat_list_state *s, int visible_rows) {
     if (!s) return;
-    s->cursor       = 0;
+    memset(s, 0, sizeof(*s));
     s->scroll_offset = 0;
     s->visible_rows  = visible_rows > 0 ? visible_rows : 1;
+}
+
+static float cat__ls_ease(uint32_t elapsed_ms) {
+    float t = cat__clampf((float)elapsed_ms / CAT__LIST_PANE_ANIM_MS, 0.0f, 1.0f);
+    float inv = 1.0f - t;
+    return 1.0f - inv * inv * inv;
+}
+
+static void cat__ls_visual_position(cat_list_state *s, uint32_t now,
+                                    float *cursor, float *scroll) {
+    if (!s->anim_active) {
+        *cursor = (float)s->cursor;
+        *scroll = (float)s->scroll_offset;
+        return;
+    }
+
+    float t = cat__ls_ease(now - s->anim_start_ms);
+    *cursor = cat__lerpf(s->anim_from_cursor, (float)s->cursor, t);
+    *scroll = cat__lerpf(s->anim_from_scroll, (float)s->scroll_offset, t);
+    if (t >= 1.0f) {
+        s->anim_active = false;
+    }
+}
+
+static void cat__ls_begin_motion(cat_list_state *s, float from_cursor,
+                                 float from_scroll, uint32_t now) {
+    s->anim_from_cursor = from_cursor;
+    s->anim_from_scroll = from_scroll;
+    s->anim_start_ms = now;
+    s->anim_active = fabsf(from_cursor - (float)s->cursor) > 0.001f ||
+                     fabsf(from_scroll - (float)s->scroll_offset) > 0.001f;
+}
+
+static void cat__ls_snap_motion(cat_list_state *s) {
+    s->anim_from_cursor = (float)s->cursor;
+    s->anim_from_scroll = (float)s->scroll_offset;
+    s->anim_start_ms = SDL_GetTicks();
+    s->anim_active = false;
 }
 
 static void cat__ls_clamp(cat_list_state *s, int count) {
@@ -5793,6 +5998,9 @@ static void cat__ls_clamp(cat_list_state *s, int count) {
 void cat_list_state_move(cat_list_state *s, int delta, int count) {
     if (!s || delta == 0) return;
     if (count <= 0) { cat_ui_feedback_emit(CAT_UI_EDGE); return; }
+    uint32_t now = SDL_GetTicks();
+    float from_cursor, from_scroll;
+    cat__ls_visual_position(s, now, &from_cursor, &from_scroll);
     int before = s->cursor;
     /* Wrap around the ends (top<->bottom) rather than clamping, matching the
        tab navigation. Modulo keeps it correct for any delta magnitude. */
@@ -5800,6 +6008,10 @@ void cat_list_state_move(cat_list_state *s, int delta, int count) {
     if (next < 0) next += count;
     s->cursor = next;
     cat__ls_clamp(s, count);
+    bool wrapped = (delta > 0 && s->cursor < before) ||
+                   (delta < 0 && s->cursor > before);
+    if (wrapped) cat__ls_snap_motion(s);
+    else cat__ls_begin_motion(s, from_cursor, from_scroll, now);
     /* Wrapping means this is nearly always a move; a single-item list is the
        case that legitimately reports a boundary. */
     cat_ui_feedback_emit(s->cursor != before ? CAT_UI_MOVED : CAT_UI_EDGE);
@@ -5808,12 +6020,16 @@ void cat_list_state_move(cat_list_state *s, int delta, int count) {
 void cat_list_state_page(cat_list_state *s, int delta, int count) {
     if (!s || delta == 0) return;
     if (count <= 0) { cat_ui_feedback_emit(CAT_UI_EDGE); return; }
+    uint32_t now = SDL_GetTicks();
+    float from_cursor, from_scroll;
+    cat__ls_visual_position(s, now, &from_cursor, &from_scroll);
     int before = s->cursor;
     int next = s->cursor + s->visible_rows * delta;
     if (next < 0)     next = 0;
     if (next >= count) next = count - 1;
     s->cursor = next;
     cat__ls_clamp(s, count);
+    cat__ls_begin_motion(s, from_cursor, from_scroll, now);
     /* Unlike move, page clamps -- so sitting on the first or last item and
        paging again is a real boundary. */
     cat_ui_feedback_emit(s->cursor != before ? CAT_UI_MOVED : CAT_UI_EDGE);
@@ -5825,6 +6041,7 @@ void cat_list_state_jump(cat_list_state *s, int target, int count) {
     if (target >= count) target = count - 1;
     s->cursor = target;
     cat__ls_clamp(s, count);
+    cat__ls_snap_motion(s);
 }
 
 int cat_list_state_jump_letter(cat_list_state *s,
@@ -5872,23 +6089,93 @@ int cat_list_state_jump_letter(cat_list_state *s,
     return 0;
 }
 
+static void cat__draw_list_pane_impl(int x, int y, int w, int h,
+                                     int item_count, const cat_list_state *state,
+                                     int item_height,
+                                     cat_list_focus_draw_fn draw_focus,
+                                     cat_list_item_draw_fn draw_item,
+                                     cat_list_layered_item_draw_fn draw_layered_item,
+                                     void *user, bool layered) {
+    if (!state || item_count <= 0 || item_height <= 0 ||
+        (layered ? !draw_layered_item : !draw_item)) return;
+    /* The historical draw API takes a const state pointer, but every valid state
+       was initialized through the mutable state API. Only presentation fields
+    advance here; logical cursor and scroll targets remain caller-owned. */
+    cat_list_state *motion = (cat_list_state *)state;
+    float visual_cursor, visual_scroll;
+    cat__ls_visual_position(motion, SDL_GetTicks(),
+                            &visual_cursor, &visual_scroll);
+    if (motion->anim_active) cat_request_frame();
+
+    int visible = state->visible_rows;
+    int first = (int)floorf(visual_scroll);
+    int end = (int)ceilf(visual_scroll) + visible + 1;
+    if (first < 0) first = 0;
+    if (end > item_count) end = item_count;
+
+    SDL_Renderer *renderer = cat_get_renderer();
+    SDL_bool had_clip = SDL_RenderIsClipEnabled(renderer);
+    SDL_Rect previous_clip;
+    if (had_clip) SDL_RenderGetClipRect(renderer, &previous_clip);
+    SDL_Rect pane_clip = { x, y, w, h };
+    if (had_clip) {
+        SDL_Rect intersection;
+        if (SDL_IntersectRect(&previous_clip, &pane_clip, &intersection))
+            pane_clip = intersection;
+        else
+            pane_clip = (SDL_Rect){ 0, 0, 0, 0 };
+    }
+    SDL_RenderSetClipRect(renderer, &pane_clip);
+
+    if (layered && draw_focus && state->cursor >= 0 && state->cursor < item_count) {
+        int focus_y = y + (int)((visual_cursor - visual_scroll) * item_height);
+        draw_focus(x, focus_y, w, item_height, user);
+    }
+
+    /* Each item is drawn exactly once at its animated content position. In the
+       layered form, the independent focus was already painted underneath these
+       fixed labels; its weight lets content styling track that motion. */
+    for (int i = first; i < end; i++) {
+        int iy = y + (int)(((float)i - visual_scroll) * item_height);
+        if (layered) {
+            float focus = cat__clampf(1.0f - fabsf(visual_cursor - (float)i),
+                                      0.0f, 1.0f);
+            /* Smooth the color weight while preserving exact 0/1 endpoints. */
+            focus = focus * focus * (3.0f - 2.0f * focus);
+            draw_layered_item(i, x, iy, w, item_height, focus, user);
+        } else {
+            draw_item(i, x, iy, w, item_height, i == state->cursor, user);
+        }
+    }
+
+    SDL_RenderSetClipRect(renderer, had_clip ? &previous_clip : NULL);
+
+    if (item_count > visible) {
+        int scrollbar_offset = (int)(visual_scroll + 0.5f);
+        int max_offset = item_count - visible;
+        if (scrollbar_offset < 0) scrollbar_offset = 0;
+        if (scrollbar_offset > max_offset) scrollbar_offset = max_offset;
+        cat_draw_scrollbar(x + w - CAT_S(4), y, h - CAT_S(4),
+                           visible, item_count, scrollbar_offset);
+    }
+}
+
 void cat_draw_list_pane(int x, int y, int w, int h,
                          int item_count, const cat_list_state *state,
                          int item_height, cat_list_item_draw_fn draw_item,
                          void *user) {
-    if (!state || item_count <= 0 || item_height <= 0 || !draw_item) return;
-    int visible = state->visible_rows;
-    int end     = state->scroll_offset + visible;
-    if (end > item_count) end = item_count;
+    cat__draw_list_pane_impl(x, y, w, h, item_count, state, item_height,
+                             NULL, draw_item, NULL, user, false);
+}
 
-    for (int i = state->scroll_offset; i < end; i++) {
-        int iy = y + (i - state->scroll_offset) * item_height;
-        draw_item(i, x, iy, w, item_height, (i == state->cursor), user);
-    }
-
-    if (item_count > visible)
-        cat_draw_scrollbar(x + w - CAT_S(4), y, h - CAT_S(4),
-                           visible, item_count, state->scroll_offset);
+void cat_draw_list_pane_layered(int x, int y, int w, int h,
+                                int item_count, const cat_list_state *state,
+                                int item_height,
+                                cat_list_focus_draw_fn draw_focus,
+                                cat_list_layered_item_draw_fn draw_item,
+                                void *user) {
+    cat__draw_list_pane_impl(x, y, w, h, item_count, state, item_height,
+                             draw_focus, NULL, draw_item, user, true);
 }
 
 void cat_scroll_state_init(cat_scroll_state *s) {
