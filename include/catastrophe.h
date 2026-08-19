@@ -139,8 +139,8 @@
 #define CAT_FONT_BUMP_REF_LOGICAL_H 240
 
 /* Input timing defaults (milliseconds) */
-#define CAT_INPUT_REPEAT_DELAY  300
-#define CAT_INPUT_REPEAT_RATE   100
+#define CAT_INPUT_REPEAT_DELAY  225
+#define CAT_INPUT_REPEAT_RATE    75
 #define CAT_INPUT_DEBOUNCE       20
 #ifdef PLATFORM_MY355
 #define CAT_AXIS_DEADZONE     20000  /* MY355 joystick needs higher deadzone to avoid crosstalk */
@@ -375,6 +375,19 @@ static inline SDL_Color cat_color_to_sdl(cat_color c) {
 /* Immediate drawing color. This intentionally remains SDL_Color-shaped while
  * cat_color is the packed stylesheet/color-storage type above. */
 typedef SDL_Color cat_draw_color;
+
+static inline cat_draw_color cat_draw_color_lerp(cat_draw_color from,
+                                                  cat_draw_color to, float t) {
+    if (t < 0.0f) t = 0.0f;
+    if (t > 1.0f) t = 1.0f;
+    cat_draw_color out = {
+        (uint8_t)(from.r + (to.r - from.r) * t + 0.5f),
+        (uint8_t)(from.g + (to.g - from.g) * t + 0.5f),
+        (uint8_t)(from.b + (to.b - from.b) * t + 0.5f),
+        (uint8_t)(from.a + (to.a - from.a) * t + 0.5f),
+    };
+    return out;
+}
 
 /* Legacy alias retained for existing Apostrophe-era consumers. */
 typedef cat_draw_color ap_color;
@@ -3332,11 +3345,8 @@ static void cat__arm_direction_repeat(cat_button btn, uint32_t now) {
 
 static void cat__advance_repeat_deadline(uint32_t *deadline, uint32_t now) {
     if (!deadline) return;
-    if (*deadline == 0) {
-        *deadline = now + cat__g.input_repeat_rate_ms;
-    } else {
-        *deadline += cat__g.input_repeat_rate_ms;
-    }
+    /* Skip missed repeats instead of replaying them in a burst after a slow frame. */
+    *deadline = now + cat__g.input_repeat_rate_ms;
 }
 
 static void cat__advance_direction_repeat(cat_button btn, uint32_t now) {
