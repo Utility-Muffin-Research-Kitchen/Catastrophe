@@ -686,7 +686,6 @@ typedef struct {
 /* Rendered text texture cache entry */
 typedef struct {
     TTF_Font     *font;
-    uint32_t      color_rgba;
     uint32_t      hash;
     char          text[CAT_TEXT_CACHE_MAX_TEXT];
     SDL_Texture  *texture;
@@ -4432,10 +4431,6 @@ void cat_draw_star(int cx, int cy, int outer_r, cat_draw_color c) {
                        indices, 3 * CAT__STAR_PERIM);
 }
 
-static uint32_t cat__text_color_key(cat_draw_color c) {
-    return cat_color_rgba(c.r, c.g, c.b, c.a);
-}
-
 static uint32_t cat__text_hash(const char *s) {
     uint32_t h = 2166136261u;
     while (*s) {
@@ -4483,27 +4478,12 @@ static int cat__draw_text_uncached(TTF_Font *font, const char *text, int x, int 
 }
 
 static cat_text_cache_entry *cat__text_cache_find(TTF_Font *font, const char *text,
-                                                  uint32_t color_rgba,
                                                   uint32_t hash) {
     for (int i = 0; i < cat__g.text_cache.count; i++) {
         cat_text_cache_entry *e = &cat__g.text_cache.entries[i];
         if (e->font == font &&
-            e->color_rgba == color_rgba &&
             e->hash == hash &&
             strcmp(e->text, text) == 0) {
-            e->last_used = SDL_GetTicks();
-            return e;
-        }
-    }
-    return NULL;
-}
-
-static cat_text_cache_entry *cat__text_cache_find_any_color(TTF_Font *font,
-                                                            const char *text,
-                                                            uint32_t hash) {
-    for (int i = 0; i < cat__g.text_cache.count; i++) {
-        cat_text_cache_entry *e = &cat__g.text_cache.entries[i];
-        if (e->font == font && e->hash == hash && strcmp(e->text, text) == 0) {
             e->last_used = SDL_GetTicks();
             return e;
         }
@@ -4525,11 +4505,17 @@ static void cat__text_cache_evict(int idx) {
 }
 
 static cat_text_cache_entry *cat__text_cache_insert(TTF_Font *font, const char *text,
-                                                    cat_draw_color color,
-                                                    uint32_t color_rgba,
                                                     uint32_t hash) {
+    /* Glyphs are rasterized white and tinted at draw time with SDL colour
+       modulation. TTF_RenderUTF8_Blended writes (r,g,b,coverage), so white plus
+       a (r,g,b) mod is pixel-identical to rasterizing in that colour -- and it
+       keeps colour out of the cache key. Animated text (a row lerping between
+       theme->text and theme->highlighted_text as the cursor moves) would
+       otherwise miss on every frame, re-rasterizing and re-uploading the same
+       string at a slightly different tint and evicting live entries to do it. */
     int w = 0, h = 0;
-    SDL_Texture *tex = cat__render_text_texture(font, text, color, &w, &h);
+    cat_draw_color white = { 255, 255, 255, 255 };
+    SDL_Texture *tex = cat__render_text_texture(font, text, white, &w, &h);
     if (!tex) return NULL;
 
     if (cat__g.text_cache.count >= CAT_TEXT_CACHE_SIZE) {
@@ -4545,7 +4531,6 @@ static cat_text_cache_entry *cat__text_cache_insert(TTF_Font *font, const char *
 
     cat_text_cache_entry *e = &cat__g.text_cache.entries[cat__g.text_cache.count++];
     e->font = font;
-    e->color_rgba = color_rgba;
     e->hash = hash;
     strncpy(e->text, text, sizeof(e->text) - 1);
     e->text[sizeof(e->text) - 1] = '\0';
@@ -4556,16 +4541,20 @@ static cat_text_cache_entry *cat__text_cache_insert(TTF_Font *font, const char *
     return e;
 }
 
-static cat_text_cache_entry *cat__text_cache_get(TTF_Font *font, const char *text,
-                                                 cat_draw_color color) {
+/* Tint a cached (white) glyph texture for this draw. */
+static void cat__text_apply_tint(SDL_Texture *tex, cat_draw_color color) {
+    SDL_SetTextureColorMod(tex, color.r, color.g, color.b);
+    SDL_SetTextureAlphaMod(tex, color.a);
+}
+
+static cat_text_cache_entry *cat__text_cache_get(TTF_Font *font, const char *text) {
     if (!font || !text || !text[0] || !cat__g.renderer || !cat__text_cacheable(text))
         return NULL;
 
     uint32_t hash = cat__text_hash(text);
-    uint32_t color_rgba = cat__text_color_key(color);
-    cat_text_cache_entry *e = cat__text_cache_find(font, text, color_rgba, hash);
+    cat_text_cache_entry *e = cat__text_cache_find(font, text, hash);
     if (e) return e;
-    return cat__text_cache_insert(font, text, color, color_rgba, hash);
+    return cat__text_cache_insert(font, text, hash);
 }
 
 static void cat__text_cache_clear(void) {
@@ -4581,8 +4570,9 @@ int cat_draw_text(TTF_Font *font, const char *text, int x, int y, cat_draw_color
     font = cat__font_for_text(font, text);   /* draw and measure must agree */
     if (!font || !text || !text[0]) return 0;
 
-    cat_text_cache_entry *e = cat__text_cache_get(font, text, color);
+    cat_text_cache_entry *e = cat__text_cache_get(font, text);
     if (e && e->texture) {
+        cat__text_apply_tint(e->texture, color);
         SDL_Rect dst = {x, y, e->w, e->h};
         SDL_RenderCopy(cat__g.renderer, e->texture, NULL, &dst);
         return e->w;
@@ -4596,8 +4586,9 @@ int cat_draw_text_clipped(TTF_Font *font, const char *text, int x, int y, cat_dr
     if (!font || !text || !text[0]) return 0;
     if (max_w <= 0) return cat_draw_text(font, text, x, y, color);
 
-    cat_text_cache_entry *e = cat__text_cache_get(font, text, color);
+    cat_text_cache_entry *e = cat__text_cache_get(font, text);
     if (e && e->texture) {
+        cat__text_apply_tint(e->texture, color);
         int draw_w = e->w;
         if (draw_w > max_w) draw_w = max_w;
 
@@ -4882,7 +4873,7 @@ int cat_measure_text(TTF_Font *font, const char *text) {
     if (!font || !text || !text[0]) return 0;
     if (cat__text_cacheable(text)) {
         cat_text_cache_entry *e =
-            cat__text_cache_find_any_color(font, text, cat__text_hash(text));
+            cat__text_cache_find(font, text, cat__text_hash(text));
         if (e) return e->w;
     }
     int w = 0;
