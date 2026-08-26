@@ -461,7 +461,9 @@ Get the display name string for a virtual button (e.g. `"A"`, `"UP"`, `"START"`)
 
 #### `void cat_set_input_delay(uint32_t ms)`
 
-Set input debounce delay in milliseconds.
+Set the per-button fresh-press debounce delay in milliseconds. Button releases
+always pass through and directional hold-repeat uses its separately configured
+repeat rate.
 
 #### `void cat_set_input_repeat(uint32_t delay_ms, uint32_t rate_ms)`
 

@@ -830,7 +830,8 @@ typedef struct {
     uint32_t      input_delay_ms;
     uint32_t      input_repeat_delay_ms;
     uint32_t      input_repeat_rate_ms;
-    uint32_t      last_input_time;
+    uint32_t      last_input_press_time[CAT_BTN_COUNT];
+    bool          input_press_seen[CAT_BTN_COUNT];
 
     /* Directional repeat */
     uint8_t       hat_held;
@@ -3871,12 +3872,20 @@ bool cat_poll_input(cat_input_event *event) {
         *event = cat__input_queue[cat__input_tail];
         cat__input_tail = (cat__input_tail + 1) % 64;
 
-        /* Debounce: skip events too close together */
-        uint32_t now = SDL_GetTicks();
-        if (cat__g.input_delay_ms > 0 && (now - cat__g.last_input_time) < cat__g.input_delay_ms) {
-            continue;
+        /* Debounce duplicate fresh presses per button. Releases must always
+           pass through and must never consume the next press's debounce slot;
+           generated hold-repeat already has its own rate control. */
+        if (event->pressed && !event->repeated) {
+            uint32_t now = SDL_GetTicks();
+            uint32_t *last = &cat__g.last_input_press_time[event->button];
+            if (cat__g.input_press_seen[event->button] &&
+                cat__g.input_delay_ms > 0 &&
+                (now - *last) < cat__g.input_delay_ms) {
+                continue;
+            }
+            *last = now;
+            cat__g.input_press_seen[event->button] = true;
         }
-        cat__g.last_input_time = now;
 
         return true;
     }
@@ -5807,7 +5816,11 @@ static bool cat__footer_overflow_consume_open_request(void) {
     if (!cat__footer_overflow_enabled()) return true;
 
     cat__footer_overflow_show_hidden_actions();
-    cat__g.last_input_time = SDL_GetTicks();
+    uint32_t now = SDL_GetTicks();
+    for (int i = 0; i < CAT_BTN_COUNT; i++) {
+        cat__g.last_input_press_time[i] = now;
+        cat__g.input_press_seen[i] = true;
+    }
     return true;
 }
 

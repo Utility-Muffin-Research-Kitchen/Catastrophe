@@ -4,6 +4,7 @@
 #
 # Targets:
 #   make native       — Build examples for the current host OS (auto-detect)
+#   make input-test   — Run the input debounce regression check
 #   make mac          — Build examples natively for macOS
 #   make linux        — Build examples natively for Linux
 #   make windows      — Build examples natively for Windows (MSYS2/MinGW)
@@ -69,7 +70,7 @@ WARN_CFLAGS := -Wall -Wextra -Wno-unused-parameter
 
 # ─── Phony targets ───────────────────────────────────────────────────────
 
-.PHONY: all native mac linux windows tg5040 tg5050 my355 assets assets-force package deploy clean help FORCE
+.PHONY: all native input-test mac linux windows tg5040 tg5050 my355 assets assets-force package deploy clean help FORCE
 
 assets:
 	@set -euo pipefail; \
@@ -109,6 +110,8 @@ assets-force:
 # ─── Native (auto-detect host OS) ─────────────────────────────────────
 
 native: $(NATIVE_PLATFORM)
+input-test: $(NATIVE_PLATFORM)-input-debounce-test
+	@$(BUILD_DIR)/$(NATIVE_PLATFORM)/input-debounce-test/input-debounce-test$(if $(filter windows,$(NATIVE_PLATFORM)),.exe)
 run-native: run-$(NATIVE_PLATFORM)
 run-native-%:
 	$(MAKE) run-$(NATIVE_PLATFORM)-$*
