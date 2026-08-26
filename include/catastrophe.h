@@ -3097,8 +3097,12 @@ static cat_button cat__map_key_event(SDL_KeyboardEvent *kev) {
 }
 #endif
 
-/* Internal input event buffer */
+/* Internal input event buffer. The parallel _ms array records when each event
+   arrived, not when it is popped: a long frame drains several frames' worth of
+   events in one burst, and debouncing on pop time would collapse their real
+   spacing to zero and discard everything after the first. */
 static cat_input_event cat__input_queue[64];
+static uint32_t cat__input_queue_ms[64];
 static int cat__input_head = 0;
 static int cat__input_tail = 0;
 
@@ -3129,13 +3133,16 @@ static bool cat__footer_overflow_enabled(void) {
 
 static void cat__input_remove_buttons(cat_button a, cat_button b) {
     cat_input_event filtered[64];
+    uint32_t filtered_ms[64];
     int filtered_count = 0;
     int idx = cat__input_tail;
 
     while (idx != cat__input_head && filtered_count < 64) {
         cat_input_event ev = cat__input_queue[idx];
+        uint32_t ev_ms = cat__input_queue_ms[idx];
         idx = (idx + 1) % 64;
         if (!ev.repeated && (ev.button == a || ev.button == b)) continue;
+        filtered_ms[filtered_count] = ev_ms;
         filtered[filtered_count++] = ev;
     }
 
@@ -3143,6 +3150,7 @@ static void cat__input_remove_buttons(cat_button a, cat_button b) {
     cat__input_head = filtered_count % 64;
     for (int i = 0; i < filtered_count; i++) {
         cat__input_queue[i] = filtered[i];
+        cat__input_queue_ms[i] = filtered_ms[i];
     }
 }
 
@@ -3329,6 +3337,7 @@ static void cat__input_push(cat_button btn, bool pressed) {
     int next = (cat__input_head + 1) % 64;
     if (next == cat__input_tail) return; /* queue full */
     cat__input_queue[cat__input_head] = (cat_input_event){ btn, pressed, false };
+    cat__input_queue_ms[cat__input_head] = now;
     cat__input_head = next;
     cat__g.needs_frame = true;
 }
@@ -3374,6 +3383,7 @@ static bool cat__repeat_direction(cat_button btn, uint32_t now) {
     int next = (cat__input_head + 1) % 64;
     if (next != cat__input_tail) {
         cat__input_queue[cat__input_head] = (cat_input_event){ btn, true, true };
+        cat__input_queue_ms[cat__input_head] = now;
         cat__input_head = next;
         cat__g.needs_frame = true;
     }
@@ -3849,6 +3859,7 @@ static void cat__process_sdl_events(void) {
                 int next = (cat__input_head + 1) % 64;
                 if (next != cat__input_tail) {
                     cat__input_queue[cat__input_head] = (cat_input_event){ b, true, true };
+                    cat__input_queue_ms[cat__input_head] = now;
                     cat__input_head = next;
                     cat__g.needs_frame = true;
                 }
@@ -3868,15 +3879,28 @@ bool cat_poll_input(cat_input_event *event) {
         /* Pop from internal queue */
         if (cat__input_head == cat__input_tail) return false;
 
+        uint32_t ev_ms = cat__input_queue_ms[cat__input_tail];
         *event = cat__input_queue[cat__input_tail];
         cat__input_tail = (cat__input_tail + 1) % 64;
 
-        /* Debounce: skip events too close together */
-        uint32_t now = SDL_GetTicks();
-        if (cat__g.input_delay_ms > 0 && (now - cat__g.last_input_time) < cat__g.input_delay_ms) {
-            continue;
+        /* Debounce: skip presses too close together. Measured from when the
+           events arrived, so a slow frame that queues several of them costs
+           latency and not input — comparing against SDL_GetTicks() here would
+           give every event in one drain the same timestamp and throw away all
+           but the first. Releases neither gate nor arm the window: callers
+           discard them, and letting one hold the budget means the next press,
+           arriving a handful of ms later, is the one that disappears. */
+        if (event->pressed) {
+            /* Signed delta: an event stamped at or before the last accepted one
+               (the footer-overflow chord parks last_input_time at pop time to
+               swallow what the chord queued) is inside the window, not a
+               wrapped-around eternity ago. */
+            int32_t since = (int32_t)(ev_ms - cat__g.last_input_time);
+            if (cat__g.input_delay_ms > 0 && since < (int32_t)cat__g.input_delay_ms) {
+                continue;
+            }
+            cat__g.last_input_time = ev_ms;
         }
-        cat__g.last_input_time = now;
 
         return true;
     }
