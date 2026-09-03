@@ -34,6 +34,9 @@
 #include <time.h>
 #include <sys/stat.h>
 #include <dirent.h>
+#if defined(__linux__) || defined(__APPLE__)
+#include <poll.h>
+#endif
 
 #ifdef __linux__
 #include <pthread.h>
@@ -787,6 +790,7 @@ typedef struct {
     int                 wake_fd_count;
     uint32_t            wake_rescan_ms;    /* next periodic wake-set rescan */
     bool                wake_dirty;        /* pads added/removed: rebind wake fds early */
+    int                 idle_wake_fd;      /* borrowed application wake source, -1 = none */
     bool                input_backend_ready; /* joystick subsystem + devices opened */
 
     /* Scaling */
@@ -1336,6 +1340,9 @@ bool           cat_is_cancelled(int result);
 
 void  cat_request_frame(void);
 void  cat_request_frame_in(uint32_t ms);
+/* POSIX: wake cat_present() when fd is readable (e.g. a signal self-pipe).
+   The caller owns and drains fd; pass -1 to detach before closing it. */
+void  cat_set_idle_wake_fd(int fd);
 
 /* ═══════════════════════════════════════════════════════════════════════════
  * IMPLEMENTATION
@@ -4035,6 +4042,10 @@ void cat_request_frame(void) {
     cat__g.needs_frame = true;
 }
 
+void cat_set_idle_wake_fd(int fd) {
+    cat__g.idle_wake_fd = fd;
+}
+
 void cat_request_frame_in(uint32_t ms) {
     uint32_t target = SDL_GetTicks() + ms;
     if (cat__g.next_redraw_ms == 0 || target < cat__g.next_redraw_ms) {
@@ -4111,14 +4122,17 @@ void cat_present(void) {
                 (int32_t)(SDL_GetTicks() - cat__g.wake_rescan_ms) >= 0) {
                 cat__wake_rescan();
             }
-            if (cat__g.wake_fd_count > 0) {
+            if (cat__g.wake_fd_count > 0 || cat__g.idle_wake_fd >= 0) {
                 uint32_t start = SDL_GetTicks();
                 int remaining = timeout;
                 while (remaining > 0) {
-                    struct pollfd pfds[CAT__WAKE_MAX_FDS];
+                    struct pollfd pfds[CAT__WAKE_MAX_FDS + 1];
                     for (int i = 0; i < cat__g.wake_fd_count; i++) {
                         pfds[i] = (struct pollfd){ cat__g.wake_fds[i], POLLIN, 0 };
                     }
+                    int count = cat__g.wake_fd_count;
+                    if (cat__g.idle_wake_fd >= 0)
+                        pfds[count++] = (struct pollfd){ cat__g.idle_wake_fd, POLLIN, 0 };
                     /* Never sleep past a rebind opportunity. A controller that
                      * connects while we are blocked here is not in this fd set,
                      * so nothing it sends can wake us -- and idle sleep runs to
@@ -4129,15 +4143,18 @@ void cat_present(void) {
                      * than that. */
                     int slice = remaining < CAT__WAKE_RESCAN_MS
                                     ? remaining : CAT__WAKE_RESCAN_MS;
-                    int r = poll(pfds, cat__g.wake_fd_count, slice);
+                    int r = poll(pfds, count, slice);
                     if (r < 0) break; /* error */
                     if (r == 0) {
                         /* Slice expired with no input: pick up any device that
                          * appeared, then wait out the rest of the budget. */
-                        cat__wake_rescan();
+                        if ((int32_t)(SDL_GetTicks() - cat__g.wake_rescan_ms) >= 0)
+                            cat__wake_rescan();
                         remaining = timeout - (int)(SDL_GetTicks() - start);
                         continue;
                     }
+                    if (cat__g.idle_wake_fd >= 0 &&
+                        pfds[count - 1].revents != 0) break;
                     bool woke = false;
                     for (int i = 0; i < cat__g.wake_fd_count; i++) {
                         if (pfds[i].revents & POLLIN) {
@@ -4165,6 +4182,12 @@ void cat_present(void) {
              * keep input latency low and the window-server happy. */
             uint32_t deadline = now + (uint32_t)timeout;
             for (;;) {
+#if defined(__linux__) || defined(__APPLE__)
+                if (cat__g.idle_wake_fd >= 0) {
+                    struct pollfd pfd = { cat__g.idle_wake_fd, POLLIN, 0 };
+                    if (poll(&pfd, 1, 0) != 0) break;
+                }
+#endif
                 SDL_PumpEvents();
                 if (SDL_HasEvents(SDL_FIRSTEVENT, SDL_LASTEVENT)) break;
                 uint32_t t = SDL_GetTicks();
@@ -7375,6 +7398,7 @@ int cat_init(cat_config *cfg) {
     }
 
     memset(&cat__g, 0, sizeof(cat__g));
+    cat__g.idle_wake_fd = -1;
     for (int i = 0; i < CAT__WAKE_MAX_FDS; i++) cat__g.wake_fds[i] = -1;
     for (int i = 0; i < CAT__MAX_PADS; i++) cat__g.pads[i].id = -1;
     #if CAT_PLATFORM_IS_DEVICE
