@@ -531,6 +531,7 @@ typedef struct {
     int                 grid_border_w;           /* unfocused border px, 0 = none, default 2 */
     int                 grid_focus_border_w;     /* focused border px, default 3 */
     int                 grid_focus_scale_pct;    /* focused tile size, % of tile, default 110 */
+    int                 grid_status_scale_pct;   /* status cluster size, % of the stock bar, default 70 */
     cat_color           grid_border_color;       /* default white @ 60/255 */
     cat_color           grid_focus_border_color; /* default the theme accent */
     uint32_t            grid_anim_ms;            /* row scroll duration ms, default 180 */
@@ -1102,6 +1103,12 @@ int            cat_draw_device_icon(cat_device_icon icon, int x, int y, cat_draw
    target to multiply the image's alpha by the rounded mask; falls back to a plain
    cat_draw_image when r<=0, corners==0, or no render target is available. */
 void           cat_draw_image_rounded_ex(SDL_Texture *tex, int x, int y, int w, int h, int r, unsigned corners);
+/* Round off whatever is already in the current render target: multiplies the
+   region's alpha by a rounded-rect mask, so the corners outside the shape become
+   transparent and everything inside is untouched. For a caller that composes a
+   tile itself and wants the shape without a second scratch target. Returns false
+   (and changes nothing) where the renderer rejects the custom blend mode. */
+bool           cat_mask_rounded_rect(int x, int y, int w, int h, int r, unsigned corners);
 SDL_Texture   *cat_load_image(const char *path);
 /* Load `path` downscaled so its largest dimension is <= max_dim, backed by an
    on-disk thumbnail at `thumb_path`. Large source images (e.g. ~1MB box-art PNGs)
@@ -1926,6 +1933,7 @@ static void cat__stylesheet_launcher_init_default(cat_stylesheet_launcher *l) {
     l->grid_border_w        = 2;
     l->grid_focus_border_w  = 3;
     l->grid_focus_scale_pct = 110;
+    l->grid_status_scale_pct = 70;
     l->grid_border_color       = cat_color_rgba(0xFF, 0xFF, 0xFF, 0x3C);
     /* Alpha 0 is a sentinel: "use the theme accent", resolved at draw time, so a
        theme that sets no focus colour tracks the user's colour scheme. */
@@ -2108,6 +2116,8 @@ static void cat__stylesheet_load_launcher(cat_stylesheet_launcher *l, cJSON *obj
     if (cJSON_IsNumber(v) && v->valueint >= 0) l->grid_focus_border_w = v->valueint;
     v = cJSON_GetObjectItem(obj, "grid_focus_scale_pct");
     if (cJSON_IsNumber(v) && v->valueint >= 100 && v->valueint <= 150) l->grid_focus_scale_pct = v->valueint;
+    v = cJSON_GetObjectItem(obj, "grid_status_scale_pct");
+    if (cJSON_IsNumber(v) && v->valueint >= 40 && v->valueint <= 100) l->grid_status_scale_pct = v->valueint;
     cat__stylesheet_load_color(&l->grid_border_color, obj, "grid_border_color");
     cat__stylesheet_load_color(&l->grid_focus_border_color, obj, "grid_focus_border_color");
     v = cJSON_GetObjectItem(obj, "grid_anim_ms");
@@ -4370,6 +4380,30 @@ void cat_draw_rounded_rect_ex(int x, int y, int w, int h, int r, unsigned corner
     if (round_tr) cat__fill_circle_quadrant(x + w - r, y + r - 1, r, 1); else { SDL_Rect q = { x + w - r, y,         r, r }; SDL_RenderFillRect(rend, &q); }
     if (round_bl) cat__fill_circle_quadrant(x + r - 1, y + h - r, r, 2); else { SDL_Rect q = { x,         y + h - r, r, r }; SDL_RenderFillRect(rend, &q); }
     if (round_br) cat__fill_circle_quadrant(x + w - r, y + h - r, r, 3); else { SDL_Rect q = { x + w - r, y + h - r, r, r }; SDL_RenderFillRect(rend, &q); }
+}
+
+bool cat_mask_rounded_rect(int x, int y, int w, int h, int r, unsigned corners) {
+    SDL_Renderer *rend = cat__g.renderer;
+    if (!rend || w <= 0 || h <= 0) return false;
+    /* dst.a = src.a * dst.a, dst.rgb untouched. The corner sprites are drawn as
+       textures rather than with the draw colour, so the assets texture needs the
+       same blend mode or the corners would be copied in opaque. */
+    SDL_BlendMode mask = SDL_ComposeCustomBlendMode(
+        SDL_BLENDFACTOR_ZERO, SDL_BLENDFACTOR_ONE,       SDL_BLENDOPERATION_ADD,
+        SDL_BLENDFACTOR_ZERO, SDL_BLENDFACTOR_SRC_ALPHA, SDL_BLENDOPERATION_ADD);
+    SDL_BlendMode saved_draw;
+    SDL_GetRenderDrawBlendMode(rend, &saved_draw);
+    if (SDL_SetRenderDrawBlendMode(rend, mask) != 0) return false;
+    SDL_BlendMode saved_assets = SDL_BLENDMODE_BLEND;
+    if (cat__g.status_assets) {
+        SDL_GetTextureBlendMode(cat__g.status_assets, &saved_assets);
+        SDL_SetTextureBlendMode(cat__g.status_assets, mask);
+    }
+    cat_draw_color white = { 255, 255, 255, 255 };
+    cat_draw_rounded_rect_ex(x, y, w, h, r, corners, white);
+    if (cat__g.status_assets) SDL_SetTextureBlendMode(cat__g.status_assets, saved_assets);
+    SDL_SetRenderDrawBlendMode(rend, saved_draw);
+    return true;
 }
 
 void cat_draw_rounded_rect(int x, int y, int w, int h, int r, cat_draw_color c) {
