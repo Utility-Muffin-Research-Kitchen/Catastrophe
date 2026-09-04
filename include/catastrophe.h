@@ -529,7 +529,8 @@ typedef struct {
     int                 grid_gutter;             /* px between tiles, default 30 */
     int                 grid_radius_pct;         /* corner radius as % of tile, default 18 */
     int                 grid_border_w;           /* unfocused border px, 0 = none, default 2 */
-    int                 grid_focus_border_w;     /* focused border px, default 6 */
+    int                 grid_focus_border_w;     /* focused border px, default 3 */
+    int                 grid_focus_scale_pct;    /* focused tile size, % of tile, default 110 */
     cat_color           grid_border_color;       /* default white @ 60/255 */
     cat_color           grid_focus_border_color; /* default the theme accent */
     uint32_t            grid_anim_ms;            /* row scroll duration ms, default 180 */
@@ -1920,10 +1921,11 @@ static void cat__stylesheet_launcher_init_default(cat_stylesheet_launcher *l) {
     l->grid_cols            = 3;
     l->grid_rows            = 2;
     l->grid_margin          = 45;
-    l->grid_gutter          = 30;
+    l->grid_gutter          = 48;
     l->grid_radius_pct      = 18;
     l->grid_border_w        = 2;
-    l->grid_focus_border_w  = 6;
+    l->grid_focus_border_w  = 3;
+    l->grid_focus_scale_pct = 110;
     l->grid_border_color       = cat_color_rgba(0xFF, 0xFF, 0xFF, 0x3C);
     /* Alpha 0 is a sentinel: "use the theme accent", resolved at draw time, so a
        theme that sets no focus colour tracks the user's colour scheme. */
@@ -2104,6 +2106,8 @@ static void cat__stylesheet_load_launcher(cat_stylesheet_launcher *l, cJSON *obj
     if (cJSON_IsNumber(v) && v->valueint >= 0) l->grid_border_w = v->valueint;
     v = cJSON_GetObjectItem(obj, "grid_focus_border_w");
     if (cJSON_IsNumber(v) && v->valueint >= 0) l->grid_focus_border_w = v->valueint;
+    v = cJSON_GetObjectItem(obj, "grid_focus_scale_pct");
+    if (cJSON_IsNumber(v) && v->valueint >= 100 && v->valueint <= 150) l->grid_focus_scale_pct = v->valueint;
     cat__stylesheet_load_color(&l->grid_border_color, obj, "grid_border_color");
     cat__stylesheet_load_color(&l->grid_focus_border_color, obj, "grid_focus_border_color");
     v = cJSON_GetObjectItem(obj, "grid_anim_ms");
