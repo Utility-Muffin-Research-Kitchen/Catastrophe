@@ -153,7 +153,11 @@
 #define CAT_TEXT_SCROLL_PAUSE_MS 1000
 
 /* Texture cache capacity */
-#define CAT_TEXTURE_CACHE_SIZE 32
+/* 32 was too small once a view holds a page of tiles and a list scrolls covers
+   past them: a 12-tile grid plus a scrolled game list evicts the tiles long
+   before the user returns to them, so backing out re-decoded every icon. The
+   entries are thumbnails, so the ceiling is tens of megabytes, not hundreds. */
+#define CAT_TEXTURE_CACHE_SIZE 96
 #define CAT_TEXT_CACHE_SIZE 64
 #define CAT_TEXT_CACHE_MAX_TEXT 192
 
