@@ -100,6 +100,7 @@ struct cat_list_opts {
     TTF_Font        *item_font;          /* Override list item text (default: CAT_FONT_LARGE) */
     cat_list_footer_update_fn footer_update; /* Optional live footer updater */
     void            *footer_update_userdata;
+    bool           (*cancel_requested)(void); /* Optional host cancellation; pair with an idle wake fd */
 };
 
 /* Result from closing a list */
@@ -212,6 +213,7 @@ typedef struct {
     const char     *image_path;    /* Optional image above message */
     cat_footer_item *footer;
     int             footer_count;
+    bool          (*cancel_requested)(void); /* Optional host cancellation; pair with an idle wake fd */
 } cat_message_opts;
 
 typedef struct {
@@ -827,6 +829,10 @@ int cat_list(cat_list_opts *opts, cat_list_result *result) {
     uint32_t last_frame = SDL_GetTicks();
 
     while (running) {
+        if (opts->cancel_requested && opts->cancel_requested()) {
+            result->action = CAT_ACTION_BACK;
+            break;
+        }
         uint32_t now = SDL_GetTicks();
         uint32_t dt = now - last_frame;
         last_frame = now;
@@ -2944,6 +2950,7 @@ int cat_confirmation(cat_message_opts *opts, cat_confirm_result *result) {
 
     bool running = true;
     while (running) {
+        if (opts->cancel_requested && opts->cancel_requested()) break;
         cat_input_event ev;
         while (cat_poll_input(&ev)) {
             if (!ev.pressed) continue;
