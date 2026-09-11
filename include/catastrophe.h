@@ -533,7 +533,7 @@ typedef struct {
     int                 grid_cols;               /* visible columns, default 3 */
     int                 grid_rows;               /* visible rows, default 2 */
     int                 grid_margin;             /* outer inset px (logical), default 45 */
-    int                 grid_gutter;             /* px between tiles, default 30 */
+    int                 grid_gutter;             /* px between tiles, default 48 */
     int                 grid_radius_pct;         /* corner radius as % of tile, default 18 */
     int                 grid_border_w;           /* unfocused border px, 0 = none, default 2 */
     int                 grid_focus_border_w;     /* focused border px, default 3 */
