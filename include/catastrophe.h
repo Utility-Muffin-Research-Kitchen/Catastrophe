@@ -156,7 +156,11 @@
 #define CAT_TEXT_SCROLL_PAUSE_MS 1000
 
 /* Texture cache capacity */
-#define CAT_TEXTURE_CACHE_SIZE 32
+/* 32 was too small once a view holds a page of tiles and a list scrolls covers
+   past them: a 12-tile grid plus a scrolled game list evicts the tiles long
+   before the user returns to them, so backing out re-decoded every icon. The
+   entries are thumbnails, so the ceiling is tens of megabytes, not hundreds. */
+#define CAT_TEXTURE_CACHE_SIZE 96
 #define CAT_TEXT_CACHE_SIZE 64
 #define CAT_TEXT_CACHE_MAX_TEXT 192
 
@@ -509,6 +513,7 @@ typedef enum {
     CAT_LAUNCHER_VERTICAL   = 1,  /* NextUI-style: flat left nav list + right preview */
     CAT_LAUNCHER_HORIZONTAL = 2,  /* kUI-style: horizontal parallelogram carousel */
     CAT_LAUNCHER_COVERFLOW  = 3,  /* icon coverflow carousel */
+    CAT_LAUNCHER_GRID       = 4,  /* vertical-scrolling grid of rounded system tiles */
 } cat_launcher_layout;
 
 typedef struct {
@@ -522,6 +527,23 @@ typedef struct {
     uint8_t             coverflow_side_alpha;    /* default 140 */
     uint32_t            coverflow_anim_ms;       /* slide duration ms, default 180 */
     char                coverflow_icon_dir[128]; /* relative to theme dir, default "system_icons" */
+    /* Grid tunables (CAT_LAUNCHER_GRID only). Icon size is NOT a tunable: it is
+       derived from cols/rows and the available region so any density fills the
+       screen exactly (see plans/grid-view-and-user-themes.md). */
+    int                 grid_cols;               /* visible columns, default 3 */
+    int                 grid_rows;               /* visible rows, default 2 */
+    int                 grid_margin;             /* outer inset px (logical), default 45 */
+    int                 grid_gutter;             /* px between tiles, default 48 */
+    int                 grid_radius_pct;         /* corner radius as % of tile, default 18 */
+    int                 grid_border_w;           /* unfocused border px, 0 = none, default 2 */
+    int                 grid_focus_border_w;     /* focused border px, default 3 */
+    int                 grid_focus_scale_pct;    /* focused tile size, % of tile, default 110 */
+    int                 grid_status_scale_pct;   /* status cluster size, % of the stock bar, default 70 */
+    cat_color           grid_border_color;       /* default white @ 60/255 */
+    cat_color           grid_focus_border_color; /* default the theme accent */
+    uint32_t            grid_anim_ms;            /* row scroll duration ms, default 180 */
+    char                grid_icon_dir[128];      /* relative to theme dir, default "system_icons" */
+    char                grid_label_dir[128];     /* full-tile overlays, default "grid_labels" */
 } cat_stylesheet_launcher;
 
 typedef struct {
@@ -1089,6 +1111,12 @@ int            cat_draw_device_icon(cat_device_icon icon, int x, int y, cat_draw
    target to multiply the image's alpha by the rounded mask; falls back to a plain
    cat_draw_image when r<=0, corners==0, or no render target is available. */
 void           cat_draw_image_rounded_ex(SDL_Texture *tex, int x, int y, int w, int h, int r, unsigned corners);
+/* Round off whatever is already in the current render target: multiplies the
+   region's alpha by a rounded-rect mask, so the corners outside the shape become
+   transparent and everything inside is untouched. For a caller that composes a
+   tile itself and wants the shape without a second scratch target. Returns false
+   (and changes nothing) where the renderer rejects the custom blend mode. */
+bool           cat_mask_rounded_rect(int x, int y, int w, int h, int r, unsigned corners);
 SDL_Texture   *cat_load_image(const char *path);
 /* Load `path` downscaled so its largest dimension is <= max_dim, backed by an
    on-disk thumbnail at `thumb_path`. Large source images (e.g. ~1MB box-art PNGs)
@@ -1908,6 +1936,24 @@ static void cat__stylesheet_launcher_init_default(cat_stylesheet_launcher *l) {
     l->coverflow_anim_ms    = 180;
     strncpy(l->coverflow_icon_dir, "system_icons", sizeof(l->coverflow_icon_dir) - 1);
     l->coverflow_icon_dir[sizeof(l->coverflow_icon_dir) - 1] = '\0';
+    l->grid_cols            = 3;
+    l->grid_rows            = 2;
+    l->grid_margin          = 45;
+    l->grid_gutter          = 48;
+    l->grid_radius_pct      = 18;
+    l->grid_border_w        = 2;
+    l->grid_focus_border_w  = 3;
+    l->grid_focus_scale_pct = 110;
+    l->grid_status_scale_pct = 70;
+    l->grid_border_color       = cat_color_rgba(0xFF, 0xFF, 0xFF, 0x3C);
+    /* Alpha 0 is a sentinel: "use the theme accent", resolved at draw time, so a
+       theme that sets no focus colour tracks the user's colour scheme. */
+    l->grid_focus_border_color = cat_color_rgba(0x00, 0x00, 0x00, 0x00);
+    l->grid_anim_ms         = 180;
+    strncpy(l->grid_icon_dir, "system_icons", sizeof(l->grid_icon_dir) - 1);
+    l->grid_icon_dir[sizeof(l->grid_icon_dir) - 1] = '\0';
+    strncpy(l->grid_label_dir, "grid_labels", sizeof(l->grid_label_dir) - 1);
+    l->grid_label_dir[sizeof(l->grid_label_dir) - 1] = '\0';
 }
 
 void cat_stylesheet_init_default(cat_stylesheet *s) {
@@ -2037,6 +2083,8 @@ static void cat__stylesheet_load_launcher(cat_stylesheet_launcher *l, cJSON *obj
             l->layout = CAT_LAUNCHER_HORIZONTAL;
         else if (strcmp(v->valuestring, "coverflow") == 0)
             l->layout = CAT_LAUNCHER_COVERFLOW;
+        else if (strcmp(v->valuestring, "grid") == 0)
+            l->layout = CAT_LAUNCHER_GRID;
         else
             l->layout = CAT_LAUNCHER_TABBED;
     }
@@ -2060,6 +2108,40 @@ static void cat__stylesheet_load_launcher(cat_stylesheet_launcher *l, cJSON *obj
     if (cJSON_IsString(v)) {
         strncpy(l->coverflow_icon_dir, v->valuestring, sizeof(l->coverflow_icon_dir) - 1);
         l->coverflow_icon_dir[sizeof(l->coverflow_icon_dir) - 1] = '\0';
+    }
+    /* Grid. Counts and pixel values are clamped to sane floors so a bad theme
+       cannot divide by zero or draw a negative tile; radius is a percentage. */
+    v = cJSON_GetObjectItem(obj, "grid_cols");
+    if (cJSON_IsNumber(v) && v->valueint >= 1 && v->valueint <= 8) l->grid_cols = v->valueint;
+    v = cJSON_GetObjectItem(obj, "grid_rows");
+    if (cJSON_IsNumber(v) && v->valueint >= 1 && v->valueint <= 6) l->grid_rows = v->valueint;
+    v = cJSON_GetObjectItem(obj, "grid_margin");
+    if (cJSON_IsNumber(v) && v->valueint >= 0) l->grid_margin = v->valueint;
+    v = cJSON_GetObjectItem(obj, "grid_gutter");
+    if (cJSON_IsNumber(v) && v->valueint >= 0) l->grid_gutter = v->valueint;
+    v = cJSON_GetObjectItem(obj, "grid_radius_pct");
+    if (cJSON_IsNumber(v) && v->valueint >= 0 && v->valueint <= 50) l->grid_radius_pct = v->valueint;
+    v = cJSON_GetObjectItem(obj, "grid_border_w");
+    if (cJSON_IsNumber(v) && v->valueint >= 0) l->grid_border_w = v->valueint;
+    v = cJSON_GetObjectItem(obj, "grid_focus_border_w");
+    if (cJSON_IsNumber(v) && v->valueint >= 0) l->grid_focus_border_w = v->valueint;
+    v = cJSON_GetObjectItem(obj, "grid_focus_scale_pct");
+    if (cJSON_IsNumber(v) && v->valueint >= 100 && v->valueint <= 150) l->grid_focus_scale_pct = v->valueint;
+    v = cJSON_GetObjectItem(obj, "grid_status_scale_pct");
+    if (cJSON_IsNumber(v) && v->valueint >= 40 && v->valueint <= 100) l->grid_status_scale_pct = v->valueint;
+    cat__stylesheet_load_color(&l->grid_border_color, obj, "grid_border_color");
+    cat__stylesheet_load_color(&l->grid_focus_border_color, obj, "grid_focus_border_color");
+    v = cJSON_GetObjectItem(obj, "grid_anim_ms");
+    if (cJSON_IsNumber(v) && v->valueint >= 0) l->grid_anim_ms = (uint32_t)v->valueint;
+    v = cJSON_GetObjectItem(obj, "grid_icon_dir");
+    if (cJSON_IsString(v)) {
+        strncpy(l->grid_icon_dir, v->valuestring, sizeof(l->grid_icon_dir) - 1);
+        l->grid_icon_dir[sizeof(l->grid_icon_dir) - 1] = '\0';
+    }
+    v = cJSON_GetObjectItem(obj, "grid_label_dir");
+    if (cJSON_IsString(v)) {
+        strncpy(l->grid_label_dir, v->valuestring, sizeof(l->grid_label_dir) - 1);
+        l->grid_label_dir[sizeof(l->grid_label_dir) - 1] = '\0';
     }
 }
 
@@ -4325,6 +4407,30 @@ void cat_draw_rounded_rect_ex(int x, int y, int w, int h, int r, unsigned corner
     if (round_tr) cat__fill_circle_quadrant(x + w - r, y + r - 1, r, 1); else { SDL_Rect q = { x + w - r, y,         r, r }; SDL_RenderFillRect(rend, &q); }
     if (round_bl) cat__fill_circle_quadrant(x + r - 1, y + h - r, r, 2); else { SDL_Rect q = { x,         y + h - r, r, r }; SDL_RenderFillRect(rend, &q); }
     if (round_br) cat__fill_circle_quadrant(x + w - r, y + h - r, r, 3); else { SDL_Rect q = { x + w - r, y + h - r, r, r }; SDL_RenderFillRect(rend, &q); }
+}
+
+bool cat_mask_rounded_rect(int x, int y, int w, int h, int r, unsigned corners) {
+    SDL_Renderer *rend = cat__g.renderer;
+    if (!rend || w <= 0 || h <= 0) return false;
+    /* dst.a = src.a * dst.a, dst.rgb untouched. The corner sprites are drawn as
+       textures rather than with the draw colour, so the assets texture needs the
+       same blend mode or the corners would be copied in opaque. */
+    SDL_BlendMode mask = SDL_ComposeCustomBlendMode(
+        SDL_BLENDFACTOR_ZERO, SDL_BLENDFACTOR_ONE,       SDL_BLENDOPERATION_ADD,
+        SDL_BLENDFACTOR_ZERO, SDL_BLENDFACTOR_SRC_ALPHA, SDL_BLENDOPERATION_ADD);
+    SDL_BlendMode saved_draw;
+    SDL_GetRenderDrawBlendMode(rend, &saved_draw);
+    if (SDL_SetRenderDrawBlendMode(rend, mask) != 0) return false;
+    SDL_BlendMode saved_assets = SDL_BLENDMODE_BLEND;
+    if (cat__g.status_assets) {
+        SDL_GetTextureBlendMode(cat__g.status_assets, &saved_assets);
+        SDL_SetTextureBlendMode(cat__g.status_assets, mask);
+    }
+    cat_draw_color white = { 255, 255, 255, 255 };
+    cat_draw_rounded_rect_ex(x, y, w, h, r, corners, white);
+    if (cat__g.status_assets) SDL_SetTextureBlendMode(cat__g.status_assets, saved_assets);
+    SDL_SetRenderDrawBlendMode(rend, saved_draw);
+    return true;
 }
 
 void cat_draw_rounded_rect(int x, int y, int w, int h, int r, cat_draw_color c) {
