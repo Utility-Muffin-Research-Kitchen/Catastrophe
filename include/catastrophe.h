@@ -684,6 +684,8 @@ typedef struct {
     bool         no_pill;       /* Draw icons/text inline without pill background */
     bool         use_y;         /* If true, use y_position instead of default padding */
     int          y_position;    /* Custom y position (requires use_y = true) */
+    const char  *alert_text;    /* Optional short warning drawn first (e.g. "SD read-only");
+                                   not a user toggle, so it shows whatever else is hidden */
 } cat_status_bar_opts;
 
 /* Screen fade overlay — per-frame draw state for fade-in / fade-out transitions */
@@ -6533,6 +6535,7 @@ typedef struct {
     int  bt_state;                /* 0=off, 1=on, 2=connected */
     int  visible_icon_count;
     bool single_icon_sprite_mode;
+    bool alert_visible;
 } cat__status_bar_layout;
 
 /* Resolve status-bar visibility once so width and draw logic stay in sync. */
@@ -6582,9 +6585,11 @@ static inline cat__status_bar_layout cat__resolve_status_bar_layout(const cat_st
     /* The numeric battery text counts as extra content, so a battery-only bar
        with the percentage on no longer qualifies for the centered single-icon
        pill — it falls through to the left-to-right multi-element layout. */
+    layout.alert_visible = opts->alert_text && opts->alert_text[0];
     layout.single_icon_sprite_mode =
         layout.use_sprite_layout && !layout.clock_visible &&
-        layout.visible_icon_count == 1 && !layout.battery_level_visible;
+        layout.visible_icon_count == 1 && !layout.battery_level_visible &&
+        !layout.alert_visible;
 
     return layout;
 }
@@ -6624,6 +6629,12 @@ static int cat__measure_status_bar_width(const cat_status_bar_opts *opts, TTF_Fo
     int margin = CAT_DS(CAT__BUTTON_MARGIN);
     int total_w = margin;
     bool has_any = false;
+
+    /* Alert text sits in its own inner pill: padding on both sides plus the gap. */
+    if (layout->alert_visible && font) {
+        total_w += cat_measure_text(font, opts->alert_text) + margin * 3;
+        has_any = true;
+    }
 
     if (layout->wifi_visible) {
         int wifi_w = layout->use_sprite_layout ? (CAT__WIFI_SIZE * s)
@@ -6934,9 +6945,23 @@ void cat_draw_status_bar(cat_status_bar_opts *opts) {
         return;
     }
 
-    /* Multi-element mode: render left-to-right (wifi → volume → battery → clock) */
+    /* Multi-element mode: render left-to-right (alert → wifi → volume → battery → clock) */
     int cx = pill_x + margin;
     int cy = pill_y;
+
+    if (layout.alert_visible) {
+        /* A warning must read on every theme and wallpaper, so it does not use
+           theme colors: dark text on its own amber pill, in both bar styles. */
+        static const cat_draw_color alert_bg = { 245, 166, 35, 255 };
+        static const cat_draw_color alert_fg = { 28, 22, 12, 255 };
+        int text_w = cat_measure_text(font, opts->alert_text);
+        int text_h = TTF_FontHeight(font);
+        int inner_h = text_h + CAT_DS(4);
+        if (inner_h > pill_h) inner_h = pill_h;
+        cat_draw_pill(cx, cy + (pill_h - inner_h) / 2, text_w + margin * 2, inner_h, alert_bg);
+        cat_draw_text(font, opts->alert_text, cx + margin, cy + (pill_h - text_h) / 2, alert_fg);
+        cx += text_w + margin * 3;
+    }
 
     /* Wifi icon */
     if (layout.wifi_visible) {
