@@ -530,8 +530,8 @@ typedef struct {
     /* Grid tunables (CAT_LAUNCHER_GRID only). Icon size is NOT a tunable: it is
        derived from cols/rows and the available region so any density fills the
        screen exactly (see plans/grid-view-and-user-themes.md). */
-    int                 grid_cols;               /* visible columns, default 3 */
-    int                 grid_rows;               /* visible rows, default 2 */
+    int                 grid_cols;               /* visible columns, default 4 */
+    int                 grid_rows;               /* visible rows, default 3 */
     int                 grid_margin;             /* outer inset px (logical), default 45 */
     int                 grid_gutter;             /* px between tiles, default 48 */
     int                 grid_radius_pct;         /* corner radius as % of tile, default 18 */
@@ -1938,8 +1938,8 @@ static void cat__stylesheet_launcher_init_default(cat_stylesheet_launcher *l) {
     l->coverflow_anim_ms    = 180;
     strncpy(l->coverflow_icon_dir, "system_icons", sizeof(l->coverflow_icon_dir) - 1);
     l->coverflow_icon_dir[sizeof(l->coverflow_icon_dir) - 1] = '\0';
-    l->grid_cols            = 3;
-    l->grid_rows            = 2;
+    l->grid_cols            = 4;
+    l->grid_rows            = 3;
     l->grid_margin          = 45;
     l->grid_gutter          = 48;
     l->grid_radius_pct      = 18;
