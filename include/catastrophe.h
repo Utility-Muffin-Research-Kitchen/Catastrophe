@@ -849,7 +849,7 @@ typedef struct {
        whole-string, so no run splitting and no metric surprises. */
     TTF_Font     *cjk_fonts[CAT_FONT_TIER_COUNT];
     int           cjk_font_bump;
-    char          cjk_font_rel[512];   /* stylesheet-relative, "" = none declared */
+    char          cjk_font_rel[512];   /* active face: CAT_CJK_FONT_PATH or stylesheet */
     bool          cjk_font_missing;    /* resolution already failed; stop retrying */
 
     /* Input state */
@@ -2500,6 +2500,18 @@ int cat_stylesheet_list_wallpapers(const char *theme_dir, const char ***out, int
 }
 
 int cat_reload_fonts(const char *font_path) {
+    /* A reload usually means a language or theme change, which can retire the
+       CJK face too. Its cache otherwise waits for the next CJK string to notice,
+       and a UI that has just left Japanese may never draw one, so the old face
+       would stay open for the life of the process. Clearing the remembered path
+       makes the next CJK lookup start over. */
+    for (int i = 0; i < CAT_FONT_TIER_COUNT; i++) {
+        if (cat__g.cjk_fonts[i]) {
+            TTF_CloseFont(cat__g.cjk_fonts[i]);
+            cat__g.cjk_fonts[i] = NULL;
+        }
+    }
+    cat__g.cjk_font_rel[0] = '\0';
     /* Uses the internal cat__load_fonts which already handles old-font cleanup */
     return cat__load_fonts(font_path);
 }
@@ -2972,20 +2984,21 @@ static bool cat__resolve_cjk_font_path(const char *rel, char *out, size_t out_si
    declared, when it cannot be resolved, or when `base` is not a tier font
    (the symbol fonts, which are already glyph-complete). */
 static TTF_Font *cat__cjk_font_for(TTF_Font *base) {
-    if (!base || cat__g.cjk_font_missing) return base;
+    if (!base) return base;
 
+    /* CAT_CJK_FONT_PATH beats the stylesheet. The theme's face is a regional
+       choice (Simplified Chinese glyph forms), and a host running a Japanese UI
+       needs Japanese forms for the same codepoints. Read per call rather than
+       cached so a host that switches language in-process only has to setenv;
+       the path compare below then drops the cache. */
     const cat_stylesheet *ss = cat_get_stylesheet();
-    const char *rel = ss ? ss->cjk_font.path : NULL;
-    if (!rel || !rel[0]) { cat__g.cjk_font_missing = true; return base; }
+    const char *rel = cat__env_nonempty("CAT_CJK_FONT_PATH");
+    if (!rel) rel = ss ? ss->cjk_font.path : NULL;
+    if (!rel || !rel[0]) return base;
 
-    int tier = -1;
-    for (int i = 0; i < CAT_FONT_TIER_COUNT; i++) {
-        if (cat__g.fonts[i] == base) { tier = i; break; }
-    }
-    if (tier < 0) return base;
-
-    /* A theme switch changes the declared face, and a font-size change invalidates
-       every open size. Either drops the whole cache. */
+    /* A theme or language switch changes the face, and a font-size change
+       invalidates every open size. Either drops the whole cache, and a new face
+       gets a fresh chance to resolve even if the previous one could not. */
     if (cat__g.cjk_font_bump != cat__g.font_bump ||
         strcmp(cat__g.cjk_font_rel, rel) != 0) {
         for (int i = 0; i < CAT_FONT_TIER_COUNT; i++) {
@@ -2997,7 +3010,15 @@ static TTF_Font *cat__cjk_font_for(TTF_Font *base) {
         cat__text_cache_clear();
         cat__str_copy(cat__g.cjk_font_rel, sizeof(cat__g.cjk_font_rel), rel);
         cat__g.cjk_font_bump = cat__g.font_bump;
+        cat__g.cjk_font_missing = false;
     }
+    if (cat__g.cjk_font_missing) return base;
+
+    int tier = -1;
+    for (int i = 0; i < CAT_FONT_TIER_COUNT; i++) {
+        if (cat__g.fonts[i] == base) { tier = i; break; }
+    }
+    if (tier < 0) return base;
 
     if (!cat__g.cjk_fonts[tier]) {
         char path[PATH_MAX];
