@@ -1,7 +1,7 @@
 # Bundled fonts
 
 Selectable UI families (Settings > Appearance > Layout > Font). Nunito is the
-default. All ten are SIL Open Font License 1.1; the license text lives in
+default. Every font here is SIL Open Font License 1.1; the license text lives in
 `OFL.txt` (or `LICENSE.txt`) inside each family folder.
 
 | Family | Weight(s) | License | Use |
@@ -15,7 +15,8 @@ default. All ten are SIL Open Font License 1.1; the license text lives in
 | Lexend | Bold | OFL 1.1 | UI family |
 | IBM Plex Sans | Bold | OFL 1.1 | UI family |
 | Noto Sans | Bold | OFL 1.1 | UI family |
-| Source Han Sans CN | Heavy | OFL 1.1 | CJK fallback (`cjk_font` slot) |
+| Source Han Sans CN | Regular | OFL 1.1 | CJK fallback (`cjk_font` slot) |
+| Leaf Han Sans JP | Regular | OFL 1.1 | Japanese CJK face (`CAT_CJK_FONT_PATH`) |
 
 ## Symbol fallback (`font.ttf`)
 
@@ -38,3 +39,19 @@ Themes can use any bundled font by pointing at its path relative to `res/fonts/`
 
 The font loader searches `./res/fonts/<path>` and `../res/fonts/<path>` automatically,
 so themes do not need to copy font files into their own directories.
+
+## Japanese glyph forms (`CAT_CJK_FONT_PATH`)
+
+Han characters shared by Chinese and Japanese are drawn differently in each
+(compare 直 or 骨), and the stylesheet's `cjk_font` is the Simplified Chinese face.
+A host running a Japanese UI sets `CAT_CJK_FONT_PATH` to
+`fonts/LeafHanSansJP/LeafHanSansJP-Regular.otf`, which then takes over from the
+stylesheet for every CJK string. The path resolves the same way as `cjk_font`,
+and it is read on each lookup, so a host that switches language in-process only
+has to update the variable.
+
+Leaf Han Sans JP is Source Han Sans (Japanese defaults, release 2.005R) with
+Hangul and regional alternates removed. It keeps every codepoint the Chinese face
+has, so Chinese titles still render under a Japanese UI. Source Han Sans reserves
+the font name "Source", so the modified font is renamed. Rebuild it with
+`scripts/build_leaf_han_sans_jp.py`, whose header documents the input file.
