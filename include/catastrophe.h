@@ -2309,11 +2309,16 @@ int cat_stylesheet_load_theme(cat_stylesheet *s, const char *theme_name) {
 /* Copy src into a fixed dst buffer, always NUL-terminating. Truncates if src is
    too long (callers tolerate an unresolved path). Checking the snprintf result
    keeps the build clean under -Wformat-truncation. */
+/* memmove, not snprintf: callers may pass a src inside dst (cat_set_font_bump
+   reloads from cat__g.theme.font_path into itself), and glibc's snprintf
+   clears dst before reading src, leaving an empty string. */
 static void cat__str_copy(char *dst, size_t dst_size, const char *src) {
     if (!dst || dst_size == 0) return;
-    int n = snprintf(dst, dst_size, "%s", src ? src : "");
-    if (n < 0 || (size_t)n >= dst_size)
-        dst[dst_size - 1] = '\0';
+    if (!src) src = "";
+    size_t n = strlen(src);
+    if (n >= dst_size) n = dst_size - 1;
+    memmove(dst, src, n);
+    dst[n] = '\0';
 }
 
 static void cat__stylesheet_to_theme(const cat_stylesheet *s, cat_theme *t) {
