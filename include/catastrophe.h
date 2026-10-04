@@ -5171,7 +5171,9 @@ static void cat__draw_screen_title_impl(const char *title, cat_status_bar_opts *
         if (text_w > max_w) text_w = max_w;
         x = margin + (max_w - text_w) / 2;
     }
-    cat_draw_text_clipped(font, title, x, 0, cat_get_theme()->text, max_w);
+    /* A title too long even for the smallest tier ends in "..." rather than
+       being cut through a glyph at the status-bar edge. */
+    cat_draw_text_ellipsized(font, title, x, 0, cat_get_theme()->text, max_w);
 }
 
 void cat_draw_screen_title(const char *title, cat_status_bar_opts *status_bar) {
