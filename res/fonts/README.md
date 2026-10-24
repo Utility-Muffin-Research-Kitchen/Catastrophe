@@ -17,6 +17,7 @@ default. Every font here is SIL Open Font License 1.1; the license text lives in
 | Noto Sans | Bold | OFL 1.1 | UI family |
 | Source Han Sans CN | Regular | OFL 1.1 | CJK fallback (`cjk_font` slot) |
 | Leaf Han Sans JP | Regular | OFL 1.1 | Japanese CJK face (`CAT_CJK_FONT_PATH`) |
+| Leaf Han Sans KR | Regular | OFL 1.1 | Korean UI face |
 
 ## Symbol fallback (`font.ttf`)
 
@@ -55,3 +56,18 @@ Hangul and regional alternates removed. It keeps every codepoint the Chinese fac
 has, so Chinese titles still render under a Japanese UI. Source Han Sans reserves
 the font name "Source", so the modified font is renamed. Rebuild it with
 `scripts/build_leaf_han_sans_jp.py`, whose header documents the input file.
+
+## Korean UI face
+
+None of the UI families has Hangul, and neither CJK face does. A host running a
+Korean UI uses `fonts/LeafHanSansKR/LeafHanSansKR-Regular.otf` as its UI face and
+leaves the stylesheet's `cjk_font` as it is. Hangul is not in the CJK detector, so
+Korean text stays on the UI face, while a string with Han or kana in it, such as a
+Chinese or Japanese game title, still goes to the Chinese face. A string that
+mixes Hangul with Han goes there too, and its Hangul is missing.
+
+Leaf Han Sans KR is Source Han Sans KR (release 2.005R) cut down to Latin and
+Hangul: every modern syllable and the jamo blocks, with Han ideographs, kana and
+bopomofo removed. That keeps it near 2 MB. Source Han Sans reserves the font name
+"Source", so the modified font is renamed. Rebuild it with
+`scripts/build_leaf_han_sans_kr.py`, whose header documents the input file.
