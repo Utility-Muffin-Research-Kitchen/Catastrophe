@@ -791,6 +791,15 @@ typedef struct {
     SDL_Joystick       *joy;
 } cat__pad;
 
+/* A face substituted for whole strings the theme's family cannot draw, opened
+   lazily per tier. Whole-string, so no run splitting and no metric surprises. */
+typedef struct {
+    TTF_Font *fonts[CAT_FONT_TIER_COUNT];
+    int       bump;
+    char      rel[512];   /* path this cache was opened from */
+    bool      missing;    /* resolution already failed; stop retrying */
+} cat__fallback_face;
+
 typedef struct {
     /* SDL */
     SDL_Window         *window;
@@ -843,14 +852,10 @@ typedef struct {
     /* Same glyph-complete base font, sized for footer/hint pills (not LARGE). */
     TTF_Font     *symbol_font_small;
     int           symbol_font_small_bump;
-    /* CJK face from the stylesheet's cjk_font slot, opened lazily per tier. The
-       themed families carry no CJK at all, so a Chinese or Japanese ROM name
-       renders as tofu without this. Substituted per string, not per glyph:
-       whole-string, so no run splitting and no metric surprises. */
-    TTF_Font     *cjk_fonts[CAT_FONT_TIER_COUNT];
-    int           cjk_font_bump;
-    char          cjk_font_rel[512];   /* active face: CAT_CJK_FONT_PATH or stylesheet */
-    bool          cjk_font_missing;    /* resolution already failed; stop retrying */
+    /* The themed families carry no CJK and no Hangul, so a Chinese, Japanese
+       or Korean ROM name renders as tofu without these. */
+    cat__fallback_face cjk;      /* CAT_CJK_FONT_PATH or the stylesheet's cjk_font */
+    cat__fallback_face hangul;   /* CAT_HANGUL_FONT_PATH or Leaf Han Sans KR */
 
     /* Input state */
     bool          face_buttons_flipped;
@@ -1388,6 +1393,7 @@ void  cat_set_idle_wake_fd(int fd);
 
 /* Global state singleton */
 static cat__state cat__g = {0};
+static void cat__fallback_close(cat__fallback_face *face);
 
 /* Last error message buffer */
 static char cat__error_buf[512] = {0};
@@ -2505,18 +2511,13 @@ int cat_stylesheet_list_wallpapers(const char *theme_dir, const char ***out, int
 }
 
 int cat_reload_fonts(const char *font_path) {
-    /* A reload usually means a language or theme change, which can retire the
-       CJK face too. Its cache otherwise waits for the next CJK string to notice,
-       and a UI that has just left Japanese may never draw one, so the old face
-       would stay open for the life of the process. Clearing the remembered path
-       makes the next CJK lookup start over. */
-    for (int i = 0; i < CAT_FONT_TIER_COUNT; i++) {
-        if (cat__g.cjk_fonts[i]) {
-            TTF_CloseFont(cat__g.cjk_fonts[i]);
-            cat__g.cjk_fonts[i] = NULL;
-        }
-    }
-    cat__g.cjk_font_rel[0] = '\0';
+    /* A reload usually means a language or theme change, which can retire a
+       fallback face too. Its cache otherwise waits for the next such string to
+       notice, and a UI that has just left Japanese may never draw one, so the
+       old face would stay open for the life of the process. Clearing the
+       remembered path makes the next lookup start over. */
+    cat__fallback_close(&cat__g.cjk);
+    cat__fallback_close(&cat__g.hangul);
     /* Uses the internal cat__load_fonts which already handles old-font cleanup */
     return cat__load_fonts(font_path);
 }
@@ -2919,6 +2920,11 @@ static TTF_Font *cat__get_symbol_font_small(void) {
  * contains any CJK codepoint. Mixed "游戏 Game" strings render entirely in the
  * CJK face, which is fine: Source Han Sans has full Latin coverage.
  *
+ * Hangul gets its own face. Neither CJK face carries it, so a string with any
+ * Hangul goes to Leaf Han Sans KR instead, and Chinese or Japanese text, which
+ * never holds Hangul, is unaffected. A Korean string that mixes in Hanja loses
+ * the Hanja, the rarer of the two.
+ *
  * The substitution MUST happen identically in drawing and in measurement, or
  * ellipsizing and the marquee compute widths against a different face than the
  * one that renders. Both go through cat__font_for_text for that reason. */
@@ -2954,6 +2960,36 @@ static bool cat__text_has_cjk(const char *s) {
     return false;
 }
 
+/* True if the UTF-8 string contains Hangul: syllables, the jamo blocks, or the
+   parenthesized and circled forms. */
+static bool cat__text_has_hangul(const char *s) {
+    if (!s) return false;
+    for (const unsigned char *p = (const unsigned char *)s; *p; ) {
+        uint32_t cp;
+        int len;
+        if (*p < 0x80)            { p++; continue; }        /* ASCII fast path */
+        else if ((*p & 0xE0) == 0xC0) { cp = *p & 0x1Fu; len = 2; }
+        else if ((*p & 0xF0) == 0xE0) { cp = *p & 0x0Fu; len = 3; }
+        else if ((*p & 0xF8) == 0xF0) { cp = *p & 0x07u; len = 4; }
+        else                      { p++; continue; }        /* stray continuation */
+        int i = 1;
+        for (; i < len; i++) {
+            if ((p[i] & 0xC0) != 0x80) break;
+            cp = (cp << 6) | (uint32_t)(p[i] & 0x3Fu);
+        }
+        if (i < len) { p++; continue; }
+        p += len;
+        if ((cp >= 0x1100u && cp <= 0x11FFu) ||   /* Jamo                       */
+            (cp >= 0x3130u && cp <= 0x318Fu) ||   /* Compatibility Jamo         */
+            (cp >= 0x3200u && cp <= 0x321Eu) ||   /* Parenthesized Hangul       */
+            (cp >= 0x3260u && cp <= 0x327Eu) ||   /* Circled Hangul             */
+            (cp >= 0xA960u && cp <= 0xA97Fu) ||   /* Jamo Extended-A            */
+            (cp >= 0xAC00u && cp <= 0xD7FFu))     /* Syllables, Jamo Extended-B */
+            return true;
+    }
+    return false;
+}
+
 /* Resolve the stylesheet's cjk_font path the same way cat__load_fonts resolves a
    themed family: absolute, then CAT_FONTS_DIR, then the shared res/fonts tree. */
 static bool cat__resolve_cjk_font_path(const char *rel, char *out, size_t out_size) {
@@ -2983,41 +3019,38 @@ static bool cat__resolve_cjk_font_path(const char *rel, char *out, size_t out_si
     return false;
 }
 
-/* The CJK face at the same size as `base`. Tier is recovered by pointer
-   identity against the loaded tiers, which is exact -- deriving a size from
-   TTF_FontHeight would guess. Returns `base` unchanged when no cjk_font is
-   declared, when it cannot be resolved, or when `base` is not a tier font
-   (the symbol fonts, which are already glyph-complete). */
-static TTF_Font *cat__cjk_font_for(TTF_Font *base) {
-    if (!base) return base;
+/* Close every open size of `face` and forget its path, so the next lookup
+   starts over. */
+static void cat__fallback_close(cat__fallback_face *face) {
+    for (int i = 0; i < CAT_FONT_TIER_COUNT; i++) {
+        if (face->fonts[i]) {
+            TTF_CloseFont(face->fonts[i]);
+            face->fonts[i] = NULL;
+        }
+    }
+    face->rel[0] = '\0';
+}
 
-    /* CAT_CJK_FONT_PATH beats the stylesheet. The theme's face is a regional
-       choice (Simplified Chinese glyph forms), and a host running a Japanese UI
-       needs Japanese forms for the same codepoints. Read per call rather than
-       cached so a host that switches language in-process only has to setenv;
-       the path compare below then drops the cache. */
-    const cat_stylesheet *ss = cat_get_stylesheet();
-    const char *rel = cat__env_nonempty("CAT_CJK_FONT_PATH");
-    if (!rel) rel = ss ? ss->cjk_font.path : NULL;
-    if (!rel || !rel[0]) return base;
+/* `face` opened from `rel` at the same size as `base`. Tier is recovered by
+   pointer identity against the loaded tiers, which is exact -- deriving a size
+   from TTF_FontHeight would guess. Returns `base` unchanged when `rel` is empty,
+   when it cannot be resolved, or when `base` is not a tier font (the symbol
+   fonts, which are already glyph-complete). */
+static TTF_Font *cat__fallback_font_for(cat__fallback_face *face, const char *rel,
+                                        TTF_Font *base) {
+    if (!base || !rel || !rel[0]) return base;
 
     /* A theme or language switch changes the face, and a font-size change
        invalidates every open size. Either drops the whole cache, and a new face
        gets a fresh chance to resolve even if the previous one could not. */
-    if (cat__g.cjk_font_bump != cat__g.font_bump ||
-        strcmp(cat__g.cjk_font_rel, rel) != 0) {
-        for (int i = 0; i < CAT_FONT_TIER_COUNT; i++) {
-            if (cat__g.cjk_fonts[i]) {
-                TTF_CloseFont(cat__g.cjk_fonts[i]);
-                cat__g.cjk_fonts[i] = NULL;
-            }
-        }
+    if (face->bump != cat__g.font_bump || strcmp(face->rel, rel) != 0) {
+        cat__fallback_close(face);
         cat__text_cache_clear();
-        cat__str_copy(cat__g.cjk_font_rel, sizeof(cat__g.cjk_font_rel), rel);
-        cat__g.cjk_font_bump = cat__g.font_bump;
-        cat__g.cjk_font_missing = false;
+        cat__str_copy(face->rel, sizeof(face->rel), rel);
+        face->bump = cat__g.font_bump;
+        face->missing = false;
     }
-    if (cat__g.cjk_font_missing) return base;
+    if (face->missing) return base;
 
     int tier = -1;
     for (int i = 0; i < CAT_FONT_TIER_COUNT; i++) {
@@ -3025,32 +3058,55 @@ static TTF_Font *cat__cjk_font_for(TTF_Font *base) {
     }
     if (tier < 0) return base;
 
-    if (!cat__g.cjk_fonts[tier]) {
+    if (!face->fonts[tier]) {
         char path[PATH_MAX];
         if (!cat__resolve_cjk_font_path(rel, path, sizeof(path))) {
-            cat__g.cjk_font_missing = true;   /* warn once by omission, never per frame */
+            face->missing = true;   /* warn once by omission, never per frame */
             return base;
         }
         int size = cat_font_size_for_resolution(cat__font_base_sizes[tier] + cat__g.font_bump);
         if (size < 8) size = 8;
-        cat__g.cjk_fonts[tier] = cat__open_font(path, size);
-        if (!cat__g.cjk_fonts[tier]) { cat__g.cjk_font_missing = true; return base; }
+        face->fonts[tier] = cat__open_font(path, size);
+        if (!face->fonts[tier]) { face->missing = true; return base; }
         /* Undo the synthetic bold every other font gets. Emboldening is an
            algorithmic smear, and a Han glyph already spends its em box on
            strokes -- thickening them closes the counters and the character
            turns into a blob at the sizes this runs at. Latin has room to
-           absorb it; CJK does not. Native speakers reported the result reading
-           too heavy, which is the same finding from the other direction. */
-        TTF_SetFontStyle(cat__g.cjk_fonts[tier], TTF_STYLE_NORMAL);
+           absorb it; CJK does not, and neither does a Hangul syllable block.
+           Native speakers reported the result reading too heavy, which is the
+           same finding from the other direction. */
+        TTF_SetFontStyle(face->fonts[tier], TTF_STYLE_NORMAL);
     }
-    return cat__g.cjk_fonts[tier];
+    return face->fonts[tier];
+}
+
+/* The CJK face at the same size as `base`. CAT_CJK_FONT_PATH beats the
+   stylesheet. The theme's face is a regional choice (Simplified Chinese glyph
+   forms), and a host running a Japanese UI needs Japanese forms for the same
+   codepoints. Read per call rather than cached so a host that switches language
+   in-process only has to setenv; the path compare then drops the cache. */
+static TTF_Font *cat__cjk_font_for(TTF_Font *base) {
+    const cat_stylesheet *ss = cat_get_stylesheet();
+    const char *rel = cat__env_nonempty("CAT_CJK_FONT_PATH");
+    if (!rel) rel = ss ? ss->cjk_font.path : NULL;
+    return cat__fallback_font_for(&cat__g.cjk, rel, base);
+}
+
+/* The Hangul face at the same size as `base`: CAT_HANGUL_FONT_PATH, or the
+   bundled Leaf Han Sans KR. A missing file leaves `base`, as before it existed. */
+#define CAT__HANGUL_FONT_DEFAULT "fonts/LeafHanSansKR/LeafHanSansKR-Regular.otf"
+static TTF_Font *cat__hangul_font_for(TTF_Font *base) {
+    const char *rel = cat__env_nonempty("CAT_HANGUL_FONT_PATH");
+    return cat__fallback_font_for(&cat__g.hangul, rel ? rel : CAT__HANGUL_FONT_DEFAULT, base);
 }
 
 /* The single substitution point. Cheap for the common case: an ASCII-only
-   string exits cat__text_has_cjk on the fast path without touching the
-   stylesheet or the font cache. */
+   string exits both detectors on the fast path without touching the
+   stylesheet or the font cache. Hangul goes first: neither CJK face has it. */
 static TTF_Font *cat__font_for_text(TTF_Font *font, const char *text) {
-    if (!text || !text[0] || !cat__text_has_cjk(text)) return font;
+    if (!text || !text[0]) return font;
+    if (cat__text_has_hangul(text)) return cat__hangul_font_for(font);
+    if (!cat__text_has_cjk(text)) return font;
     return cat__cjk_font_for(font);
 }
 
