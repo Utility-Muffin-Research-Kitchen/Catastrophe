@@ -8,10 +8,9 @@ Latin and Hangul:
     18_SourceHanSansKR.zip -> SubsetOTF/KR/SourceHanSansKR-Regular.otf). It
     carries every modern Hangul syllable, the Hangul Jamo blocks, Latin and the
     punctuation a Korean UI uses.
-  - Han ideographs (Hanja), kana and bopomofo are dropped. A host running a
-    Korean UI uses this as its UI face and leaves the Chinese face as the
-    `cjk_font`, so a string with Han or kana in it still renders there. Hangul
-    is not in the CJK detector, so Korean text stays on this face.
+  - Han ideographs (Hanja), kana and bopomofo are dropped. Catastrophe sends a
+    string with Hangul here and a string with only Han or kana to the Chinese
+    `cjk_font`, so Chinese and Japanese titles still render.
   - Layout features are reduced to ccmp/kern/liga/calt plus the jamo features
     (ljmo/vjmo/tjmo) that compose old Hangul from jamo. Korean forms are the
     defaults in this source, so dropping locl loses nothing Korean.
