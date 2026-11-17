@@ -178,6 +178,12 @@
 #define CAT__WAKE_MAX_FDS   4
 #define CAT__WAKE_PATH_MAX  64
 #define CAT__WAKE_RESCAN_MS 3000
+/* The gamepad sweep covers /dev/input/event0 .. event(N-1). */
+#define CAT__WAKE_SCAN_NODES 16
+/* A periodic rescan only runs before a sleep at least this long. Shorter
+   sleeps mean the app is drawing continuously (video, animation), SDL is
+   reading input anyway, and the wake set is not needed until it settles. */
+#define CAT__WAKE_RESCAN_MIN_SLEEP_MS 100
 
 /* Max log message length */
 #define CAT_MAX_LOG_LEN 2048
@@ -823,6 +829,16 @@ typedef struct {
     int                 wake_fd_count;
     uint32_t            wake_rescan_ms;    /* next periodic wake-set rescan */
     bool                wake_dirty;        /* pads added/removed: rebind wake fds early */
+    /* Nodes the gamepad sweep already opened and rejected, by identity, so
+       later sweeps skip them with a stat() instead of open()+close(). On
+       some kernels (MLP1 5.10) closing an evdev fd waits 16-48 ms, which
+       stalled every rescan by over 100 ms. */
+    struct {
+        bool   valid;
+        dev_t  rdev;
+        ino_t  ino;
+        time_t ctime;
+    }                   wake_rejected[CAT__WAKE_SCAN_NODES];
     int                 idle_wake_fd;      /* borrowed application wake source, -1 = none */
     bool                input_backend_ready; /* joystick subsystem + devices opened */
 
@@ -4253,6 +4269,15 @@ static uint32_t cat__next_wake_time(void) {
 #if CAT_PLATFORM_IS_DEVICE
 static void cat__wake_rescan(void);
 static bool cat__wake_drain(int fd);
+
+/* Should cat_present() rebind the wake set before sleeping sleep_ms? A
+   hotplug always does. The periodic sweep (a controller that appeared without
+   SDL noticing) waits until the app settles into a real sleep. */
+static bool cat__wake_rescan_due(int sleep_ms) {
+    if (cat__g.wake_dirty) return true;
+    if ((int32_t)(SDL_GetTicks() - cat__g.wake_rescan_ms) < 0) return false;
+    return sleep_ms >= CAT__WAKE_RESCAN_MIN_SLEEP_MS;
+}
 #endif
 
 void cat_present(void) {
@@ -4283,9 +4308,10 @@ void cat_present(void) {
         if (timeout > 0) {
 #if CAT_PLATFORM_IS_DEVICE
             /* Periodic wake-set rebind: cheap timestamp check; rescans run at
-             * most every CAT__WAKE_RESCAN_MS or right after a hotplug event. */
-            if (cat__g.wake_dirty ||
-                (int32_t)(SDL_GetTicks() - cat__g.wake_rescan_ms) >= 0) {
+             * most every CAT__WAKE_RESCAN_MS or right after a hotplug event,
+             * and the periodic one waits for a real sleep so it never lands
+             * between two frames of continuous rendering. */
+            if (cat__wake_rescan_due(timeout)) {
                 cat__wake_rescan();
             }
             if (cat__g.wake_fd_count > 0 || cat__g.idle_wake_fd >= 0) {
@@ -4314,9 +4340,11 @@ void cat_present(void) {
                     if (r == 0) {
                         /* Slice expired with no input: pick up any device that
                          * appeared, then wait out the rest of the budget. */
-                        if ((int32_t)(SDL_GetTicks() - cat__g.wake_rescan_ms) >= 0)
-                            cat__wake_rescan();
                         remaining = timeout - (int)(SDL_GetTicks() - start);
+                        if (cat__wake_rescan_due(remaining)) {
+                            cat__wake_rescan();
+                            remaining = timeout - (int)(SDL_GetTicks() - start);
+                        }
                         continue;
                     }
                     if (cat__g.idle_wake_fd >= 0 &&
@@ -7444,10 +7472,23 @@ static void cat__wake_add_list(const char *list) {
 /* Auto-scan fallback: devices advertising BTN_GAMEPAD. */
 static void cat__wake_scan_gamepads(void) {
     unsigned char key_bits[(KEY_MAX + 1) / 8];
-    for (int i = 0; i < 16 && cat__g.wake_fd_count < CAT__WAKE_MAX_FDS; i++) {
+    for (int i = 0; i < CAT__WAKE_SCAN_NODES && cat__g.wake_fd_count < CAT__WAKE_MAX_FDS; i++) {
         char path[32];
         snprintf(path, sizeof(path), "/dev/input/event%d", i);
         if (cat__wake_have(path)) continue;
+        struct stat st;
+        if (stat(path, &st) != 0) {
+            cat__g.wake_rejected[i].valid = false;
+            continue;
+        }
+        /* Same node as last time (a re-created node gets a new inode and
+           ctime): it is still not a gamepad, and reopening it only to close
+           it again is what costs the time. */
+        if (cat__g.wake_rejected[i].valid &&
+            cat__g.wake_rejected[i].rdev == st.st_rdev &&
+            cat__g.wake_rejected[i].ino == st.st_ino &&
+            cat__g.wake_rejected[i].ctime == st.st_ctime) continue;
+        cat__g.wake_rejected[i].valid = false;
         int fd = open(path, O_RDONLY | O_NONBLOCK);
         if (fd < 0) continue;
         memset(key_bits, 0, sizeof(key_bits));
@@ -7459,6 +7500,10 @@ static void cat__wake_scan_gamepads(void) {
             cat_log("Input: idle poll() wake device %s (BTN_GAMEPAD)", path);
         } else {
             close(fd);
+            cat__g.wake_rejected[i].valid = true;
+            cat__g.wake_rejected[i].rdev = st.st_rdev;
+            cat__g.wake_rejected[i].ino = st.st_ino;
+            cat__g.wake_rejected[i].ctime = st.st_ctime;
         }
     }
 }
@@ -7470,6 +7515,7 @@ static void cat__wake_close_all(void) {
         cat__g.wake_paths[i][0] = '\0';
     }
     cat__g.wake_fd_count = 0;
+    memset(cat__g.wake_rejected, 0, sizeof(cat__g.wake_rejected));
 }
 
 static bool cat__wake_has_overrides(void) {
